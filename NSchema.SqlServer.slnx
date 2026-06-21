@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/build/">
+    <File Path=".editorconfig" />
+    <File Path=".github\workflows\cicd.yml" />
+    <File Path="Directory.Packages.props" />
+  </Folder>
+  <Folder Name="/sqlserver/">
+    <Project Path="src/NSchema.SqlServer/NSchema.SqlServer.csproj" />
+    <Project Path="tests/NSchema.SqlServer.Tests/NSchema.SqlServer.Tests.csproj" />
+  </Folder>
+</Solution>
