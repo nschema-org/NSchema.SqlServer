@@ -1,0 +1,29 @@
+﻿{
+  Statements: [
+    {
+      Sql: CREATE OR ALTER FUNCTION [dbo].[active_user_count]() RETURNS int AS BEGIN RETURN (SELECT COUNT(*) FROM dbo.users WHERE active = 1) END,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: EXEC sys.sp_rename @objname = N'[dbo].[user_count]', @newname = N'active_user_count', @objtype = N'OBJECT',
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: CREATE OR ALTER FUNCTION [dbo].[add_numbers](@a int, @b int) RETURNS int AS BEGIN RETURN @a + @b END,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: DROP FUNCTION [dbo].[active_user_count],
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: CREATE OR ALTER PROCEDURE [dbo].[archive_users](@cutoff date) AS BEGIN DELETE FROM dbo.users WHERE created_at < @cutoff END,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: DROP PROCEDURE [dbo].[archive_users],
+      RunOutsideTransaction: false
+    }
+  ],
+  IsEmpty: false
+}

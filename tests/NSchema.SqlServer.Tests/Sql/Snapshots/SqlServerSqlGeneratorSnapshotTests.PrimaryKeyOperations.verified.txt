@@ -1,0 +1,13 @@
+﻿{
+  Statements: [
+    {
+      Sql: ALTER TABLE [dbo].[users] ADD CONSTRAINT [pk_users] PRIMARY KEY ([id], [tenant_id]),
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[users] DROP CONSTRAINT [pk_users],
+      RunOutsideTransaction: false
+    }
+  ],
+  IsEmpty: false
+}

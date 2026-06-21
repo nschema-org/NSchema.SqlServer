@@ -1,0 +1,13 @@
+﻿{
+  Statements: [
+    {
+      Sql: EXEC sys.sp_rename @objname = N'[dbo].[old_users]', @newname = N'users', @objtype = N'OBJECT',
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: DROP TABLE [dbo].[legacy],
+      RunOutsideTransaction: false
+    }
+  ],
+  IsEmpty: false
+}

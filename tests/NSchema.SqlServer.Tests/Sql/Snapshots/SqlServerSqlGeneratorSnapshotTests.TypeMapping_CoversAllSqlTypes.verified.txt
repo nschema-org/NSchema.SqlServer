@@ -1,0 +1,97 @@
+﻿{
+  Statements: [
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] bit NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] tinyint NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] smallint NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] int NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] bigint NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] real NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] float NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] decimal(18, 4) NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] char(10) NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] nchar(10) NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] varchar(max) NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] varchar(100) NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] nvarchar(max) NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] nvarchar(100) NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] varchar(max) NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] date NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] time NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] datetime2 NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] datetimeoffset NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] uniqueidentifier NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] binary(16) NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] varbinary(max) NOT NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] money NOT NULL,
+      RunOutsideTransaction: false
+    }
+  ],
+  IsEmpty: false
+}
