@@ -23,10 +23,10 @@ dotnet add package NSchema.SqlServer
 
 This provider implements all the parts of NSchema's model that are compatible with SQL Server:
 
-- **Supported:** schemas, tables, columns (with `DEFAULT`, `IDENTITY`, and persisted computed columns), primary keys, foreign keys, unique constraints, check constraints, indexes (including `INCLUDE` columns and filtered indexes), views, sequences, scalar/table functions and stored procedures, table-level `GRANT`s, and documentation comments (stored as `MS_Description` extended properties).
+- **Supported:** schemas, tables, columns (with `DEFAULT`, `IDENTITY`, and persisted computed columns), primary keys, foreign keys, unique constraints, check constraints, indexes (including `INCLUDE` columns and filtered indexes), views, sequences, scalar/table functions and stored procedures, table-level `GRANT`s, triggers, and documentation comments (stored as `MS_Description` extended properties).
 - **Identifiers** are emitted with brackets (`[schema].[name]`).
 - **Column changes.** SQL Server's `ALTER COLUMN` restates the column's whole type and nullability at once, so NSchema.Core (3.1.0+) supplies both on the migration actions and the generator folds a paired type/nullability change into one statement.
-- **Not supported (no SQL Server equivalent):** triggers (NSchema models a trigger as calling a function, which SQL Server's trigger bodies are not), enums, domains, composite types, extensions, exclusion constraints, schema renames, and materialized (indexed) views. In-place changes to an identity's seed/increment or a computed column's expression require a table rebuild and raise a clear `NotSupportedException`. These all raise `NotSupportedException` rather than emitting partial SQL.
+- **Not supported (no SQL Server equivalent):** enums, domains, composite types, extensions, exclusion constraints, schema renames, and materialized (indexed) views. In-place changes to an identity's seed/increment or a computed column's expression require a table rebuild and raise a clear `NotSupportedException`. These all raise `NotSupportedException` rather than emitting partial SQL.
 
 NSchema's canonical types map to SQL Server's: `boolean` → `bit`, `double` → `float`, `datetime` → `datetime2`, `guid` → `uniqueidentifier`, unbounded `varchar`/`nvarchar`/`varbinary` → `(max)`, and so on.
 

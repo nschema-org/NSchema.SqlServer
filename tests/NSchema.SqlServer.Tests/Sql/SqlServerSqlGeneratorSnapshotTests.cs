@@ -6,6 +6,7 @@ using NSchema.Plan.Model.Routines;
 using NSchema.Plan.Model.Schemas;
 using NSchema.Plan.Model.Sequence;
 using NSchema.Plan.Model.Tables;
+using NSchema.Plan.Model.Triggers;
 using NSchema.Plan.Model.Views;
 using NSchema.Schema.Model.Columns;
 using NSchema.Schema.Model.Constraints;
@@ -14,6 +15,7 @@ using NSchema.Schema.Model.Routines;
 using NSchema.Schema.Model.Scripts;
 using NSchema.Schema.Model.Sequences;
 using NSchema.Schema.Model.Tables;
+using NSchema.Schema.Model.Triggers;
 using NSchema.Schema.Model.Views;
 using NSchema.SqlServer.Sql;
 using NSchema.Sql;
@@ -129,6 +131,18 @@ public sealed class SqlServerSqlGeneratorSnapshotTests
         new CreateIndex("dbo", "users", new TableIndex("idx_users_recent",
             [new IndexColumn("created_at", Sort: IndexSort.Descending)], Include: ["id", "notes"])),
         new DropIndex("dbo", "users", "idx_users_email"));
+
+    // ── Triggers (inline body; CREATE OR ALTER) ──────────────────────────────────
+
+    [Fact]
+    public Task TriggerOperations() => VerifyPlan(
+        new CreateTrigger("dbo", "users", new Trigger("users_audit", TriggerTiming.After,
+            TriggerEvent.Insert | TriggerEvent.Update,
+            Body: "BEGIN INSERT INTO dbo.audit (msg) VALUES ('changed'); END")),
+        new CreateTrigger("dbo", "invoices", new Trigger("invoices_guard", TriggerTiming.InsteadOf,
+            TriggerEvent.Delete, Body: "BEGIN RAISERROR('no deletes', 16, 1); END")),
+        new SetTriggerComment("dbo", "users", "users_audit", null, "audit changes"),
+        new DropTrigger("dbo", "users", "users_audit"));
 
     // ── Views (CREATE OR ALTER replaces in place) ────────────────────────────────
 

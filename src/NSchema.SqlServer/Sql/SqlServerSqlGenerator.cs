@@ -17,6 +17,7 @@ using NSchema.Schema.Model.Columns;
 using NSchema.Schema.Model.Indexes;
 using NSchema.Schema.Model.Routines;
 using NSchema.Schema.Model.Tables;
+using NSchema.Schema.Model.Triggers;
 using NSchema.Sql;
 using NSchema.Sql.Model;
 
@@ -35,9 +36,12 @@ namespace NSchema.SqlServer.Sql;
 /// <item><b>Defaults are named constraints.</b> A default is added inline or via <c>ADD DEFAULT … FOR</c>; dropping one
 /// requires finding its auto-generated constraint name, which is done with a small dynamic-SQL block.</item>
 /// <item><b>Renames go through <c>sp_rename</c></b> for tables, columns, views, routines and sequences.</item>
-/// <item><b>No equivalent (throws <see cref="NotSupportedException"/>):</b> triggers (the model calls a function),
-/// enums, domains, composite types, extensions, exclusion constraints, schema rename, materialized views, and in-place
-/// changes to a computed-column expression or an identity's seed/increment (SQL Server requires a table rebuild).</item>
+/// <item><b>Triggers carry an inline body</b> (<c>… AS &lt;body&gt;</c>); only the SQL Server-expressible facets are
+/// accepted — <c>AFTER</c>/<c>INSTEAD OF</c>, statement-level, no <c>WHEN</c>. <c>BEFORE</c>, row-level, <c>WHEN</c>,
+/// <c>TRUNCATE</c>, <c>UPDATE OF</c> and function-style triggers throw.</item>
+/// <item><b>No equivalent (throws <see cref="NotSupportedException"/>):</b> enums, domains, composite types,
+/// extensions, exclusion constraints, schema rename, materialized views, and in-place changes to a computed-column
+/// expression or an identity's seed/increment (SQL Server requires a table rebuild).</item>
 /// </list>
 /// </remarks>
 internal sealed class SqlServerSqlGenerator : ISqlGenerator
@@ -149,8 +153,12 @@ internal sealed class SqlServerSqlGenerator : ISqlGenerator
         RevokeTablePrivileges x => $"REVOKE {PrivilegeList(x.Privileges)} ON {Qualify(x.SchemaName, x.TableName)} FROM {Id(x.Role)}",
         GrantSchemaUsage or RevokeSchemaUsage => throw Unsupported("schema USAGE grants (SQL Server has no USAGE privilege on a schema)"),
 
+        // ── Triggers (inline-body form; CREATE OR ALTER keeps the object identity) ──────
+        CreateTrigger x => BuildCreateTrigger(x),
+        DropTrigger x => $"DROP TRIGGER {Qualify(x.SchemaName, x.TriggerName)}",
+        SetTriggerComment x => ExtendedProperty(x.OldComment, x.NewComment, ("SCHEMA", x.SchemaName), ("TABLE", x.TableName), ("TRIGGER", x.TriggerName)),
+
         // ── Features with no SQL Server equivalent in this model ─────────────────────────
-        CreateTrigger or DropTrigger or SetTriggerComment => throw Unsupported("triggers (NSchema models a trigger as calling a function, which SQL Server's trigger bodies are not)"),
         CreateEnum or DropEnum or RenameEnum or AddEnumValue or SetEnumComment => throw Unsupported("enum types"),
         CreateDomain or DropDomain or RenameDomain or RecreateDomain or AlterDomainDefault or AlterDomainNotNull or AddDomainCheck or DropDomainCheck or SetDomainComment => throw Unsupported("domains"),
         CreateCompositeType or DropCompositeType or RenameCompositeType or AddCompositeField or DropCompositeField or AlterCompositeFieldType or SetCompositeTypeComment => throw Unsupported("composite types"),
@@ -394,6 +402,70 @@ internal sealed class SqlServerSqlGenerator : ISqlGenerator
     // that extended-property comments survive — which is why a signature-changing RecreateRoutine needs no re-comment.
     private static string BuildCreateOrAlterRoutine(string schemaName, Routine routine) =>
         $"CREATE OR ALTER {RoutineKeyword(routine.Kind)} {Qualify(schemaName, routine.Name)}({routine.Arguments}) {routine.Definition}";
+
+    // ── Triggers ────────────────────────────────────────────────────────────────────
+
+    // CREATE OR ALTER TRIGGER [s].[name] ON [s].[table] {AFTER|INSTEAD OF} {events} AS <body>. SQL Server triggers are
+    // statement-level, fire only AFTER or INSTEAD OF, carry no WHEN clause and run an inline body — facets of the model
+    // that don't map (BEFORE, row-level, WHEN, TRUNCATE, UPDATE OF, a function indirection) are rejected loudly.
+    private static string BuildCreateTrigger(CreateTrigger x)
+    {
+        var trigger = x.Trigger;
+        if (trigger.Body is not { } body)
+        {
+            throw new NotSupportedException(
+                $"SQL Server triggers run an inline body, but trigger '{trigger.Name}' has none (it calls a function). Declare it with an AS $$ … $$ body instead.");
+        }
+
+        if (trigger.Timing == TriggerTiming.Before)
+        {
+            throw Unsupported("BEFORE triggers (SQL Server supports only AFTER and INSTEAD OF)");
+        }
+
+        if (trigger.Level == TriggerLevel.Row)
+        {
+            throw Unsupported("row-level (FOR EACH ROW) triggers (SQL Server triggers fire once per statement; use the inserted/deleted tables)");
+        }
+
+        if (trigger.When is not null)
+        {
+            throw Unsupported("a trigger WHEN condition (put the guard inside the body, e.g. IF UPDATE(column))");
+        }
+
+        if (trigger.Events.HasFlag(TriggerEvent.Truncate))
+        {
+            throw Unsupported("TRUNCATE triggers");
+        }
+
+        if (trigger.UpdateOfColumns.Count > 0)
+        {
+            throw Unsupported("UPDATE OF (columns) on a trigger (use IF UPDATE(column) inside the body)");
+        }
+
+        var timing = trigger.Timing == TriggerTiming.InsteadOf ? "INSTEAD OF" : "AFTER";
+        return $"CREATE OR ALTER TRIGGER {Qualify(x.SchemaName, trigger.Name)} ON {Qualify(x.SchemaName, x.TableName)} {timing} {TriggerEventsText(trigger.Events)} AS {body}";
+    }
+
+    private static string TriggerEventsText(TriggerEvent events)
+    {
+        var parts = new List<string>(3);
+        if (events.HasFlag(TriggerEvent.Insert))
+        {
+            parts.Add("INSERT");
+        }
+
+        if (events.HasFlag(TriggerEvent.Update))
+        {
+            parts.Add("UPDATE");
+        }
+
+        if (events.HasFlag(TriggerEvent.Delete))
+        {
+            parts.Add("DELETE");
+        }
+
+        return string.Join(", ", parts);
+    }
 
     // ── Extended properties (comments) ──────────────────────────────────────────────
 

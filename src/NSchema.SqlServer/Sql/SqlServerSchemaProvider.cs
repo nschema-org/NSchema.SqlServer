@@ -9,6 +9,7 @@ using NSchema.Schema.Model.Routines;
 using NSchema.Schema.Model.Schemas;
 using NSchema.Schema.Model.Sequences;
 using NSchema.Schema.Model.Tables;
+using NSchema.Schema.Model.Triggers;
 using NSchema.Schema.Model.Views;
 
 namespace NSchema.SqlServer.Sql;
@@ -19,9 +20,9 @@ namespace NSchema.SqlServer.Sql;
 /// <remarks>
 /// A fixed sequence of independent queries runs against one connection opened from the injected
 /// <see cref="SqlServerConnectionSource"/>; each is scoped by an optional schema-name filter (<c>null</c>/empty means
-/// "all user schemas"). Only the surfaces the generator can produce are introspected — triggers, enums, domains,
-/// composite types and extensions are out of scope. View bodies and routine modules come from
-/// <c>sys.sql_modules</c> (the database's stored form) so an <c>apply</c> round-trips; identity, computed columns and
+/// "all user schemas"). Only the surfaces the generator can produce are introspected — enums, domains, composite types
+/// and extensions are out of scope. View bodies, routine modules and trigger bodies come from <c>sys.sql_modules</c>
+/// (the database's stored form) so an <c>apply</c> round-trips; identity, computed columns, trigger events and
 /// extended-property comments are read from their dedicated catalog views.
 /// </remarks>
 internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource source) : ISchemaProvider
@@ -56,6 +57,7 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
         var sequences = await QuerySequences(connection, schemas, cancellationToken);
         var routines = await QueryRoutines(connection, schemas, cancellationToken);
         var tableGrants = await QueryTableGrants(connection, schemas, cancellationToken);
+        var triggers = await QueryTriggers(connection, schemas, cancellationToken);
 
         var schemaComments = await QueryComments(connection, schemas, SchemaCommentSql, cancellationToken);
         var tableComments = await QueryComments(connection, schemas, ObjectCommentSql("U"), cancellationToken);
@@ -65,11 +67,12 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
         var columnComments = await QueryNestedComments(connection, schemas, ColumnCommentSql, cancellationToken);
         var indexComments = await QueryNestedComments(connection, schemas, IndexCommentSql, cancellationToken);
         var constraintComments = await QueryNestedComments(connection, schemas, ConstraintCommentSql, cancellationToken);
+        var triggerComments = await QueryNestedComments(connection, schemas, TriggerCommentSql, cancellationToken);
 
         return Build(schemaNamesInDb, tables, columns, primaryKeys, uniqueConstraints, foreignKeys, checkConstraints,
-            indexes, views, sequences, routines, tableGrants,
+            indexes, views, sequences, routines, tableGrants, triggers,
             schemaComments, tableComments, viewComments, sequenceComments, routineComments,
-            columnComments, indexComments, constraintComments);
+            columnComments, indexComments, constraintComments, triggerComments);
     }
 
     // ── Row DTOs ────────────────────────────────────────────────────────────────
@@ -86,6 +89,7 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
     private sealed record SequenceRow(string Schema, string Name, string TypeName, long Start, long Increment, long Min, long Max, bool Cycle, bool IsCached, int? CacheSize);
     private sealed record RoutineRow(string Schema, string Name, bool IsProcedure, string Definition);
     private sealed record TableGrantRow(string Schema, string Table, string Role, string Privilege);
+    private sealed record TriggerRow(string Schema, string Table, string Name, bool IsInsteadOf, string Definition, string EventType);
 
     // ── Queries ───────────────────────────────────────────────────────────────────
 
@@ -231,6 +235,18 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
         ORDER BY s.name, o.name
         """, schemas, r => new RoutineRow(r.GetString(0), r.GetString(1), r.GetInt32(2) == 1, r.GetString(3)), ct);
 
+    private static Task<List<TriggerRow>> QueryTriggers(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
+        SELECT s.name, t.name, tr.name, tr.is_instead_of_trigger, m.definition, te.type_desc
+        FROM sys.triggers tr
+        JOIN sys.tables t ON t.object_id = tr.parent_id
+        JOIN sys.schemas s ON s.schema_id = t.schema_id
+        JOIN sys.sql_modules m ON m.object_id = tr.object_id
+        JOIN sys.trigger_events te ON te.object_id = tr.object_id
+        WHERE tr.is_ms_shipped = 0 AND tr.parent_class = 1
+          AND {SystemSchemaFilter} AND {SchemaScopeFilter}
+        ORDER BY s.name, t.name, tr.name
+        """, schemas, r => new TriggerRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetBoolean(3), r.GetString(4), r.GetString(5)), ct);
+
     private static Task<List<TableGrantRow>> QueryTableGrants(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
         SELECT s.name, o.name, dpr.name, dp.permission_name
         FROM sys.database_permissions dp
@@ -326,6 +342,17 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
           AND {SystemSchemaFilter} AND {SchemaScopeFilter}
         """;
 
+    // A trigger is an object; its parent table is found via the trigger's parent_id.
+    private static readonly string TriggerCommentSql = $"""
+        SELECT s.name, t.name, tr.name, CAST(ep.value AS nvarchar(max))
+        FROM sys.extended_properties ep
+        JOIN sys.triggers tr ON tr.object_id = ep.major_id
+        JOIN sys.tables t ON t.object_id = tr.parent_id
+        JOIN sys.schemas s ON s.schema_id = t.schema_id
+        WHERE ep.class = 1 AND ep.minor_id = 0 AND ep.name = '{DescriptionProperty}'
+          AND {SystemSchemaFilter} AND {SchemaScopeFilter}
+        """;
+
     // A constraint is an object in its own right; its parent table is found via the constraint's parent_object_id.
     private static readonly string ConstraintCommentSql = $"""
         SELECT s.name, t.name, con.name, CAST(ep.value AS nvarchar(max))
@@ -353,6 +380,7 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
         List<SequenceRow> sequences,
         List<RoutineRow> routines,
         List<TableGrantRow> tableGrants,
+        List<TriggerRow> triggers,
         Dictionary<(string, string), string> schemaComments,
         Dictionary<(string, string), string> tableComments,
         Dictionary<(string, string), string> viewComments,
@@ -360,12 +388,13 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
         Dictionary<(string, string), string> routineComments,
         Dictionary<(string, string, string), string> columnComments,
         Dictionary<(string, string, string), string> indexComments,
-        Dictionary<(string, string, string), string> constraintComments)
+        Dictionary<(string, string, string), string> constraintComments,
+        Dictionary<(string, string, string), string> triggerComments)
     {
         var tablesBySchema = tables
             .GroupBy(t => t.Schema)
             .ToDictionary(g => g.Key, g => g.Select(t => BuildTable(t, columns, primaryKeys, uniqueConstraints, foreignKeys,
-                checkConstraints, indexes, tableGrants, tableComments, columnComments, indexComments, constraintComments)).ToList());
+                checkConstraints, indexes, tableGrants, triggers, tableComments, columnComments, indexComments, constraintComments, triggerComments)).ToList());
 
         var viewsBySchema = views
             .GroupBy(v => v.Schema)
@@ -410,10 +439,12 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
         List<CheckRow> allChecks,
         List<IndexColumnRow> allIndexes,
         List<TableGrantRow> allGrants,
+        List<TriggerRow> allTriggers,
         Dictionary<(string, string), string> tableComments,
         Dictionary<(string, string, string), string> columnComments,
         Dictionary<(string, string, string), string> indexComments,
-        Dictionary<(string, string, string), string> constraintComments)
+        Dictionary<(string, string, string), string> constraintComments,
+        Dictionary<(string, string, string), string> triggerComments)
     {
         bool Owns(string schema, string tableName) => schema == table.Schema && tableName == table.Name;
 
@@ -474,6 +505,12 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
             .Select(g => new TableGrant(g.Key, ToTablePrivilege(g.Select(r => r.Privilege))))
             .ToList();
 
+        var triggers = allTriggers
+            .Where(t => Owns(t.Schema, t.Table))
+            .GroupBy(t => t.Name)
+            .Select(g => BuildTrigger(g.Key, g.ToList(), triggerComments.GetValueOrDefault((table.Schema, table.Name, g.Key))))
+            .ToList();
+
         return new Table(table.Name,
             PrimaryKey: primaryKey,
             Comment: tableComments.GetValueOrDefault((table.Schema, table.Name)),
@@ -482,7 +519,27 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
             UniqueConstraints: uniques,
             CheckConstraints: checks,
             Indexes: indexes,
-            Grants: grants);
+            Grants: grants,
+            Triggers: triggers);
+    }
+
+    // A SQL Server trigger is statement-level, fires AFTER or INSTEAD OF (never BEFORE), and runs an inline body — so
+    // it maps to a Trigger with no Function and a Body lifted from sys.sql_modules. One row per fired event is folded
+    // into the event flags.
+    private static Trigger BuildTrigger(string name, List<TriggerRow> rows, string? comment)
+    {
+        var events = rows.Aggregate(TriggerEvent.None, (current, r) => current | r.EventType switch
+        {
+            "INSERT" => TriggerEvent.Insert,
+            "UPDATE" => TriggerEvent.Update,
+            "DELETE" => TriggerEvent.Delete,
+            _ => TriggerEvent.None,
+        });
+
+        var first = rows[0];
+        var timing = first.IsInsteadOf ? TriggerTiming.InsteadOf : TriggerTiming.After;
+        return new Trigger(name, timing, events, Function: null, Level: TriggerLevel.Statement,
+            Comment: comment, Body: ExtractTriggerBody(first.Definition));
     }
 
     private static TablePrivilege ToTablePrivilege(IEnumerable<string> privileges) =>
@@ -615,6 +672,13 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
         return (match.Success ? moduleDefinition[match.Length..] : moduleDefinition).Trim();
     }
 
+    // The body is everything after the first top-level AS that follows the trigger's ON … {AFTER|INSTEAD OF} … header.
+    private static string ExtractTriggerBody(string moduleDefinition)
+    {
+        var match = TriggerHeader().Match(moduleDefinition);
+        return (match.Success ? moduleDefinition[match.Length..] : moduleDefinition).Trim();
+    }
+
     // Splits a routine module into the parenthesised argument list and the remaining definition. A procedure declared
     // without parentheses has its arguments taken as the text up to the first AS, which the generator re-wraps in
     // parentheses on the next apply.
@@ -642,6 +706,9 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
 
     [GeneratedRegex(@"^\s*CREATE\s+(OR\s+ALTER\s+)?VIEW\s+.+?\s+AS\s+", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex ViewHeader();
+
+    [GeneratedRegex(@"^\s*CREATE\s+(OR\s+ALTER\s+)?TRIGGER\s+.+?\s+AS\s+", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex TriggerHeader();
 
     [GeneratedRegex(@"^\s*CREATE\s+(OR\s+ALTER\s+)?(FUNCTION|PROCEDURE|PROC)\s+(\[[^\]]*\]|[^\s(]+)(\.(\[[^\]]*\]|[^\s(]+))?", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex RoutineHeader();

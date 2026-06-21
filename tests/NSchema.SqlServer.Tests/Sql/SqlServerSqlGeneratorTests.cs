@@ -7,6 +7,7 @@ using NSchema.Plan.Model.Routines;
 using NSchema.Plan.Model.Schemas;
 using NSchema.Plan.Model.Sequence;
 using NSchema.Plan.Model.Tables;
+using NSchema.Plan.Model.Triggers;
 using NSchema.Plan.Model.Views;
 using NSchema.SqlServer.Sql;
 using NSchema.SqlServer.Tests.Fixtures;
@@ -16,6 +17,7 @@ using NSchema.Schema.Model.Indexes;
 using NSchema.Schema.Model.Routines;
 using NSchema.Schema.Model.Sequences;
 using NSchema.Schema.Model.Tables;
+using NSchema.Schema.Model.Triggers;
 using NSchema.Schema.Model.Views;
 using NSchema.Sql.Model;
 
@@ -276,6 +278,70 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
 
         await Apply(new DropRoutine(_schema, "write_log", RoutineKind.Procedure));
         (await ScalarBool($"SELECT CAST(CASE WHEN OBJECT_ID(N'[{_schema}].[write_log]') IS NOT NULL THEN 1 ELSE 0 END AS bit)")).ShouldBeFalse();
+    }
+
+    // ── Triggers ──────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task RoundTrip_Trigger_IntrospectsBodyEventsTimingAndComment()
+    {
+        await Exec($"CREATE TABLE [{_schema}].[users] (id int)");
+        await Exec($"CREATE TABLE [{_schema}].[audit] (msg varchar(50), n int)");
+        // A genuinely multi-statement body (its own internal ';') exercised end to end: generate → execute → introspect.
+        var trigger = new Trigger("users_audit", TriggerTiming.After, TriggerEvent.Insert | TriggerEvent.Update,
+            Body: $"""
+                BEGIN
+                    DECLARE @c int = (SELECT COUNT(*) FROM inserted);
+                    INSERT INTO [{_schema}].[audit] (msg, n) VALUES ('changed', @c);
+                END
+                """);
+
+        await Apply(new CreateTrigger(_schema, "users", trigger));
+
+        var introspected = (await Introspect()).Tables.Single(t => t.Name == "users").Triggers.ShouldHaveSingleItem();
+        introspected.Name.ShouldBe("users_audit");
+        introspected.Timing.ShouldBe(TriggerTiming.After);
+        introspected.Events.ShouldBe(TriggerEvent.Insert | TriggerEvent.Update);
+        introspected.Level.ShouldBe(TriggerLevel.Statement);
+        introspected.Function.ShouldBeNull();
+        introspected.Body.ShouldNotBeNull();
+        introspected.Body!.ShouldContain("DECLARE");
+        introspected.Body.ShouldContain("INSERT INTO");
+
+        // CREATE OR ALTER replaces in place; the trigger fires and the body's multiple statements run (an audit row
+        // recording the inserted count lands).
+        await Exec($"INSERT INTO [{_schema}].[users] (id) VALUES (1)");
+        (await ScalarInt($"SELECT n FROM [{_schema}].[audit]")).ShouldBe(1);
+
+        // Comment, then drop.
+        await Apply(new SetTriggerComment(_schema, "users", "users_audit", null, "audit changes"));
+        (await Introspect()).Tables.Single(t => t.Name == "users").Triggers.ShouldHaveSingleItem().Comment.ShouldBe("audit changes");
+
+        await Apply(new DropTrigger(_schema, "users", "users_audit"));
+        (await Introspect()).Tables.Single(t => t.Name == "users").Triggers.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task RoundTrip_InsteadOfTrigger_IntrospectsTiming()
+    {
+        await Exec($"CREATE TABLE [{_schema}].[t] (id int)");
+        var trigger = new Trigger("t_guard", TriggerTiming.InsteadOf, TriggerEvent.Delete,
+            Body: "BEGIN RETURN; END");
+
+        await Apply(new CreateTrigger(_schema, "t", trigger));
+
+        var introspected = (await Introspect()).Tables.Single(t => t.Name == "t").Triggers.ShouldHaveSingleItem();
+        introspected.Timing.ShouldBe(TriggerTiming.InsteadOf);
+        introspected.Events.ShouldBe(TriggerEvent.Delete);
+    }
+
+    [Fact]
+    public void BeforeTrigger_IsRejected()
+    {
+        var plan = new MigrationPlan([new CreateTrigger(_schema, "users",
+            new Trigger("t", TriggerTiming.Before, TriggerEvent.Insert, Body: "BEGIN END"))], [], []);
+
+        Should.Throw<NotSupportedException>(() => _generator.Generate(plan));
     }
 
     // ── Comments, grants ──────────────────────────────────────────────────────
