@@ -17,8 +17,8 @@ using NSchema.Schema.Model.Sequences;
 using NSchema.Schema.Model.Tables;
 using NSchema.Schema.Model.Triggers;
 using NSchema.Schema.Model.Views;
-using NSchema.SqlServer.Sql;
 using NSchema.Sql;
+using NSchema.SqlServer.Sql;
 
 namespace NSchema.SqlServer.Tests.Sql;
 

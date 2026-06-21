@@ -9,8 +9,6 @@ using NSchema.Plan.Model.Sequence;
 using NSchema.Plan.Model.Tables;
 using NSchema.Plan.Model.Triggers;
 using NSchema.Plan.Model.Views;
-using NSchema.SqlServer.Sql;
-using NSchema.SqlServer.Tests.Fixtures;
 using NSchema.Schema.Model.Columns;
 using NSchema.Schema.Model.Constraints;
 using NSchema.Schema.Model.Indexes;
@@ -20,6 +18,8 @@ using NSchema.Schema.Model.Tables;
 using NSchema.Schema.Model.Triggers;
 using NSchema.Schema.Model.Views;
 using NSchema.Sql.Model;
+using NSchema.SqlServer.Sql;
+using NSchema.SqlServer.Tests.Fixtures;
 
 namespace NSchema.SqlServer.Tests.Sql;
 
