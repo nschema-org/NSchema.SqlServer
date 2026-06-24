@@ -10,6 +10,12 @@ This package uses **lockstep major versioning** with the `NSchema.Core` package:
 
 As a consequence, breaking changes that are specific to this provider (rather than the core API) are signalled by a **minor version bump** rather than a major one, and called out explicitly in this changelog.
 
+## [3.0.1] - 2026-06-24
+
+## Fixed
+
+- Fixes the ability to drop schemas by updating to `NSchema.Core 3.3.0` that properly emits `DROP` statements for schema children.
+
 ## [3.0.0] - 2026-06-21
 
 First release of the SQL Server provider for NSchema, tracking NSchema 3.2.0 (and requiring `NSchema.Core` 3.2.0 for in-place column alteration and inline-body trigger support).
