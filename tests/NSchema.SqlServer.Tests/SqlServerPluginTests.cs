@@ -46,6 +46,19 @@ public sealed class SqlServerPluginTests : IDisposable
         => _sut.GetScaffoldTemplate(new ScaffoldContext()).ShouldContain("PROVIDER sqlserver");
 
     [Fact]
+    public void GetScaffoldTemplate_WithVersion_PinsIt()
+        => _sut.GetScaffoldTemplate(new ScaffoldContext { Version = "9.9.9" }).ShouldContain("version           = '9.9.9',");
+
+    [Fact]
+    public void GetSampleSchema_ScaffoldsANamedSchema()
+    {
+        var schema = _sut.GetSampleSchema();
+
+        schema.ShouldContain("CREATE SCHEMA app;");
+        schema.ShouldContain("CREATE TABLE app.widgets");
+    }
+
+    [Fact]
     public void Configure_ValidConnectionString_SucceedsAndRegistersProvider()
     {
         // Arrange
