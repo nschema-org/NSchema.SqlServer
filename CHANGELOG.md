@@ -10,7 +10,7 @@ This package uses **lockstep major versioning** with the `NSchema.Core` package:
 
 As a consequence, breaking changes that are specific to this provider (rather than the core API) are signalled by a **minor version bump** rather than a major one, and called out explicitly in this changelog.
 
-## [4.0.0-beta.1]
+## [4.0.0-rc.1]
 
 ### Added
 
