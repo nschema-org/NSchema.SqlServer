@@ -242,7 +242,8 @@ public sealed class SqlServerSqlGeneratorSnapshotTests
         new ExecuteDataMigration("backfill emails", DataMigrationTrigger.AddColumn, "dbo", "users", "email",
             "UPDATE dbo.users SET email = login + '@example.com' WHERE email IS NULL"),
         new ExecuteDataMigration(null, DataMigrationTrigger.AddConstraint, "dbo", "orders", "ck_total_positive",
-            "DELETE FROM dbo.orders WHERE total <= 0") { RunOutsideTransaction = true });
+            "DELETE FROM dbo.orders WHERE total <= 0")
+        { RunOutsideTransaction = true });
 
     [Fact]
     public void DataMigration_EmitsTheSqlVerbatim()
