@@ -2,6 +2,7 @@ using NSchema.Plan.Model;
 using NSchema.Plan.Model.Columns;
 using NSchema.Plan.Model.Constraints;
 using NSchema.Plan.Model.Indexes;
+using NSchema.Plan.Model.Migrations;
 using NSchema.Plan.Model.Routines;
 using NSchema.Plan.Model.Schemas;
 using NSchema.Plan.Model.Sequence;
@@ -11,6 +12,7 @@ using NSchema.Plan.Model.Views;
 using NSchema.Schema.Model.Columns;
 using NSchema.Schema.Model.Constraints;
 using NSchema.Schema.Model.Indexes;
+using NSchema.Schema.Model.Migrations;
 using NSchema.Schema.Model.Routines;
 using NSchema.Schema.Model.Scripts;
 using NSchema.Schema.Model.Sequences;
@@ -232,6 +234,42 @@ public sealed class SqlServerSqlGeneratorSnapshotTests
 
     private static AlterColumnType Alter(SqlType type) =>
         new("dbo", "t", "c", SqlType.Int, type, IsNullable: false);
+
+    // ── Data migrations (user-authored SQL, passed through verbatim) ─────────────
+
+    [Fact]
+    public Task DataMigrationOperations() => VerifyPlan(
+        new ExecuteDataMigration("backfill emails", DataMigrationTrigger.AddColumn, "dbo", "users", "email",
+            "UPDATE dbo.users SET email = login + '@example.com' WHERE email IS NULL"),
+        new ExecuteDataMigration(null, DataMigrationTrigger.AddConstraint, "dbo", "orders", "ck_total_positive",
+            "DELETE FROM dbo.orders WHERE total <= 0") { RunOutsideTransaction = true });
+
+    [Fact]
+    public void DataMigration_EmitsTheSqlVerbatim()
+    {
+        // The SQL is user-authored T-SQL: no bracket quoting, no rewriting.
+        const string sql = "UPDATE dbo.users SET email = lower(login) WHERE email IS NULL";
+
+        var plan = Generator.Generate(new MigrationPlan([Migration(sql)], [], []));
+
+        plan.Statements.ShouldHaveSingleItem().Sql.ShouldBe(sql);
+    }
+
+    [Fact]
+    public void DataMigration_RunOutsideTransaction_IsCarriedOntoTheStatement()
+    {
+        var plan = Generator.Generate(new MigrationPlan(
+        [
+            Migration("UPDATE dbo.users SET a = 1") with { RunOutsideTransaction = true },
+            Migration("UPDATE dbo.users SET b = 2"),
+        ], [], []));
+
+        plan.Statements[0].RunOutsideTransaction.ShouldBeTrue();
+        plan.Statements[1].RunOutsideTransaction.ShouldBeFalse();
+    }
+
+    private static ExecuteDataMigration Migration(string sql) =>
+        new("backfill", DataMigrationTrigger.AddColumn, "dbo", "users", "email", sql);
 
     // ── Deployment scripts ──────────────────────────────────────────────────────
 
