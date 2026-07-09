@@ -1,0 +1,13 @@
+﻿{
+  Statements: [
+    {
+      Sql: UPDATE dbo.users SET email = login + '@example.com' WHERE email IS NULL,
+      RunOutsideTransaction: false
+    },
+    {
+      Sql: DELETE FROM dbo.orders WHERE total <= 0,
+      RunOutsideTransaction: true
+    }
+  ],
+  IsEmpty: false
+}

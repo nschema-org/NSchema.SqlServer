@@ -7,6 +7,7 @@ using NSchema.Plan.Model.Domains;
 using NSchema.Plan.Model.Enums;
 using NSchema.Plan.Model.Extensions;
 using NSchema.Plan.Model.Indexes;
+using NSchema.Plan.Model.Migrations;
 using NSchema.Plan.Model.Routines;
 using NSchema.Plan.Model.Schemas;
 using NSchema.Plan.Model.Sequence;
@@ -78,6 +79,8 @@ internal sealed class SqlServerSqlGenerator : ISqlGenerator
         SetColumnDefault x => BuildSetColumnDefault(x),
         AlterColumnType x => [new SqlStatement(BuildAlterColumnType(x))],
         AlterColumnNullability x => BuildAlterColumnNullability(x, context),
+        // A data migration's SQL is user-authored T-SQL, passed through verbatim at its planned position.
+        ExecuteDataMigration x => [new SqlStatement(x.Sql, x.RunOutsideTransaction)],
         _ => [new SqlStatement(GenerateSql(action))],
     };
 
@@ -164,7 +167,7 @@ internal sealed class SqlServerSqlGenerator : ISqlGenerator
         CreateCompositeType or DropCompositeType or RenameCompositeType or AddCompositeField or DropCompositeField or AlterCompositeFieldType or SetCompositeTypeComment => throw Unsupported("composite types"),
         CreateExtension or DropExtension or AlterExtension or SetExtensionComment => throw Unsupported("extensions"),
 
-        _ => throw new ArgumentOutOfRangeException(nameof(action), $"Unhandled action type: {action.GetType().Name}"),
+        _ => throw new ArgumentOutOfRangeException(nameof(action), $"Unhandled action type: {action.GetType().Name}. The plan may come from a newer NSchema.Core than this provider supports — check for a provider update."),
     };
 
     // ── Tables ────────────────────────────────────────────────────────────────────
