@@ -75,14 +75,11 @@ internal sealed class SqlServerSqlDialect : SqlDialect
             return Unsupported(action);
         }
 
-        var parts = table.Columns.Select(BuildColumnDef).ToList();
-
-        // Only the primary key is created inline; unique/check constraints, foreign keys and indexes arrive as
-        // separate ALTER TABLE / CREATE INDEX actions from the linearizer.
-        if (table.PrimaryKey is { } pk)
-        {
-            parts.Add($"CONSTRAINT {Quote(pk.Name)} PRIMARY KEY ({ColumnList(pk.ColumnNames)})");
-        }
+        // Every constraint (primary key, unique, check, foreign keys) is created inline; only indexes arrive as
+        // separate CREATE INDEX actions from the linearizer.
+        var parts = table.Columns.Select(BuildColumnDef)
+            .Concat(InlineConstraintClauses(table))
+            .ToList();
 
         return Statement($"""
             CREATE TABLE {Qualify(action.SchemaName, table.Name)} (
@@ -106,18 +103,8 @@ internal sealed class SqlServerSqlDialect : SqlDialect
     protected override Result<IReadOnlyList<SqlStatement>> RenameColumn(RenameColumn action) =>
         Statement($"EXEC sys.sp_rename @objname = N'{Lit($"{Qualify(action.Column.Owner)}.{Quote(action.Column.Member)}")}', @newname = N'{Lit(action.NewName.Value)}', @objtype = N'COLUMN'");
 
-    // SQL Server's ALTER COLUMN must restate nullability — omitting it resets the column to NULL. The core supplies
-    // the column's final nullability on the action; without it a correct statement cannot be produced.
-    protected override Result<IReadOnlyList<SqlStatement>> AlterColumnType(AlterColumnType action) =>
-        action.IsNullable is { } isNullable
-            ? Statement($"ALTER TABLE {Qualify(action.Column.Owner)} ALTER COLUMN {Quote(action.Column.Member)} {TypeSql(action.NewType)}{NullableSql(isNullable)}")
-            : Error($"Cannot alter the type of column {action.Column} on SQL Server: the plan does not carry the column's nullability, which ALTER COLUMN must restate.");
-
-    // The counterpart: a nullability change must restate the column's (final) type.
-    protected override Result<IReadOnlyList<SqlStatement>> AlterColumnNullability(AlterColumnNullability action) =>
-        action.ColumnType is { } columnType
-            ? Statement($"ALTER TABLE {Qualify(action.Column.Owner)} ALTER COLUMN {Quote(action.Column.Member)} {TypeSql(columnType)}{NullableSql(action.NewNullable)}")
-            : Error($"Cannot alter the nullability of column {action.Column} on SQL Server: the plan does not carry the column's type, which ALTER COLUMN requires.");
+    protected override Result<IReadOnlyList<SqlStatement>> AlterColumn(AlterColumn action) =>
+        Statement($"ALTER TABLE {Qualify(action.Table)} ALTER COLUMN {Quote(action.Column.Name)} {TypeSql(action.Column.Type)}{NullableSql(action.Column.IsNullable)}");
 
     protected override Result<IReadOnlyList<SqlStatement>> AlterIdentitySequence(AlterIdentitySequence action) =>
         Error($"SQL Server cannot change the seed or increment of identity column {action.Column} in place; this requires rebuilding the table. Recreate the column or table instead.");

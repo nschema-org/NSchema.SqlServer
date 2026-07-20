@@ -1,0 +1,16 @@
+﻿[
+  {
+    Sql:
+CREATE TABLE [dbo].[orders] (
+    [id] bigint IDENTITY(1, 1) NOT NULL,
+    [user_id] bigint NOT NULL,
+    [code] varchar(20) NOT NULL,
+    [total] int NOT NULL,
+    CONSTRAINT [pk_orders] PRIMARY KEY ([id]),
+    CONSTRAINT [uq_orders_code] UNIQUE ([code]),
+    CONSTRAINT [ck_orders_total] CHECK (total >= 0),
+    CONSTRAINT [fk_orders_user] FOREIGN KEY ([user_id]) REFERENCES [dbo].[users] ([id]) ON DELETE CASCADE
+),
+    RunOutsideTransaction: false
+  }
+]
