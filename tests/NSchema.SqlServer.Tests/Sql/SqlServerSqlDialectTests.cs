@@ -1,5 +1,5 @@
-using NSchema.Diff.Model;
 using Microsoft.Data.SqlClient;
+using NSchema.Diff.Model;
 using NSchema.Model;
 using NSchema.Model.Columns;
 using NSchema.Model.Constraints;
