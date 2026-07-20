@@ -1,46 +1,46 @@
 using Microsoft.Data.SqlClient;
+using NSchema.Model;
+using NSchema.Model.Columns;
+using NSchema.Model.Constraints;
+using NSchema.Model.Indexes;
+using NSchema.Model.Routines;
+using NSchema.Model.Sequences;
+using NSchema.Model.Tables;
+using NSchema.Model.Triggers;
+using NSchema.Model.Views;
 using NSchema.Plan.Model;
 using NSchema.Plan.Model.Columns;
 using NSchema.Plan.Model.Constraints;
 using NSchema.Plan.Model.Indexes;
 using NSchema.Plan.Model.Routines;
-using NSchema.Plan.Model.Schemas;
-using NSchema.Plan.Model.Sequence;
+using NSchema.Plan.Model.Sequences;
 using NSchema.Plan.Model.Tables;
 using NSchema.Plan.Model.Triggers;
 using NSchema.Plan.Model.Views;
-using NSchema.Schema.Model.Columns;
-using NSchema.Schema.Model.Constraints;
-using NSchema.Schema.Model.Indexes;
-using NSchema.Schema.Model.Routines;
-using NSchema.Schema.Model.Sequences;
-using NSchema.Schema.Model.Tables;
-using NSchema.Schema.Model.Triggers;
-using NSchema.Schema.Model.Views;
-using NSchema.Sql.Model;
 using NSchema.SqlServer.Sql;
 using NSchema.SqlServer.Tests.Fixtures;
 
 namespace NSchema.SqlServer.Tests.Sql;
 
 /// <summary>
-/// Executes the generated T-SQL against a real SQL Server (via Testcontainers) to prove it is valid, and round-trips
-/// the important surfaces back through <see cref="SqlServerSchemaProvider"/> to prove apply → introspect is stable.
+/// Executes the rendered T-SQL against a real SQL Server (via Testcontainers) to prove it is valid, and round-trips
+/// the important surfaces back through <see cref="SqlServerDatabaseIntrospector"/> to prove apply → introspect is
+/// stable.
 /// </summary>
 [Collection("sqlserver")]
-public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture) : IAsyncLifetime
+public sealed class SqlServerSqlDialectTests(SqlServerContainerFixture fixture) : IAsyncLifetime
 {
     private readonly string _connectionString = fixture.ConnectionString;
     private readonly string _schema = $"test_{Guid.NewGuid():N}";
-    private readonly SqlServerSqlGenerator _generator = new();
+    private readonly SqlServerSqlDialect _sut = new();
     private SqlConnection _conn = null!;
-    private SqlServerSchemaProvider _provider = null!;
+    private SqlServerDatabaseIntrospector _introspector = null!;
 
     public async ValueTask InitializeAsync()
     {
         _conn = new SqlConnection(_connectionString);
         await _conn.OpenAsync();
-        _provider = new SqlServerSchemaProvider(new SqlServerConnectionSource(_connectionString));
+        _introspector = new SqlServerDatabaseIntrospector(new SqlServerConnectionSource(_connectionString));
         await Exec($"CREATE SCHEMA [{_schema}]");
     }
 
@@ -50,12 +50,15 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
         await _conn.DisposeAsync();
     }
 
+    private ObjectAddress Obj(string name) => new(_schema, name);
+
+    private MemberAddress Mem(string owner, string member) => new(_schema, owner, member);
+
     private async Task Apply(params MigrationAction[] actions)
     {
-        var plan = _generator.Generate(new MigrationPlan(actions, [], []));
-        foreach (var statement in plan.Statements)
+        foreach (var statement in actions.SelectMany(action => _sut.Generate(action).Require()))
         {
-            await Exec(statement.Sql);
+            await Exec(statement.Sql.Value);
         }
     }
 
@@ -64,9 +67,12 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
     [Fact]
     public async Task CreateTable_WithIdentityPrimaryKey_CreatesTableAndIdentity()
     {
-        await Apply(new CreateTable(_schema, new Table("users",
-            PrimaryKey: new PrimaryKey("pk_users", ["id"]),
-            Columns: [new Column("id", SqlType.BigInt, IsNullable: false, IsIdentity: true)])));
+        await Apply(new CreateTable(_schema, new Table
+        {
+            Name = "users",
+            PrimaryKey = new PrimaryKey { Name = "pk_users", ColumnNames = [new("id")] },
+            Columns = [new Column { Name = "id", Type = SqlType.BigInt, IsIdentity = true }],
+        }));
 
         (await ScalarBool($"SELECT CAST(CASE WHEN OBJECT_ID(N'[{_schema}].[users]') IS NOT NULL THEN 1 ELSE 0 END AS bit)")).ShouldBeTrue();
         (await ScalarBool($"SELECT COLUMNPROPERTY(OBJECT_ID(N'[{_schema}].[users]'), 'id', 'IsIdentity')")).ShouldBeTrue();
@@ -77,13 +83,13 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
     {
         await Exec($"CREATE TABLE [{_schema}].[items] (id int)");
 
-        await Apply(new AddColumn(_schema, "items", new Column("name", SqlType.VarChar(100), IsNullable: false)));
+        await Apply(new AddColumn(Obj("items"), new Column { Name = "name", Type = SqlType.VarChar(100) }));
         (await ColumnType("items", "name")).ShouldBe("varchar");
 
-        await Apply(new RenameColumn(_schema, "items", "name", "label"));
+        await Apply(new RenameColumn(Mem("items", "name"), "label"));
         (await ColumnExists("items", "label")).ShouldBeTrue();
 
-        await Apply(new DropColumn(_schema, "items", new Column("label", SqlType.VarChar(100))));
+        await Apply(new DropColumn(Obj("items"), new Column { Name = "label", Type = SqlType.VarChar(100) }));
         (await ColumnExists("items", "label")).ShouldBeFalse();
     }
 
@@ -91,10 +97,10 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
     public async Task AlterColumnType_PreservesNotNull_WhenOnlyTypeChanges()
     {
         // The SQL Server gotcha: ALTER COLUMN that omits nullability resets the column to NULL. The action carries the
-        // column's (unchanged) nullability so the generated statement restates NOT NULL.
+        // column's (unchanged) nullability so the rendered statement restates NOT NULL.
         await Exec($"CREATE TABLE [{_schema}].[t] (c int NOT NULL)");
 
-        await Apply(new AlterColumnType(_schema, "t", "c", SqlType.Int, SqlType.BigInt, IsNullable: false));
+        await Apply(new AlterColumnType(Mem("t", "c"), SqlType.Int, SqlType.BigInt, IsNullable: false));
 
         (await ColumnType("t", "c")).ShouldBe("bigint");
         (await ColumnIsNullable("t", "c")).ShouldBeFalse();
@@ -105,30 +111,22 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
     {
         await Exec($"CREATE TABLE [{_schema}].[t] (c varchar(50) NOT NULL)");
 
-        await Apply(new AlterColumnNullability(_schema, "t", "c", OldNullable: false, NewNullable: true, ColumnType: SqlType.VarChar(50)));
+        await Apply(new AlterColumnNullability(Mem("t", "c"), OldNullable: false, NewNullable: true, ColumnType: SqlType.VarChar(50)));
 
         (await ColumnType("t", "c")).ShouldBe("varchar");
         (await ColumnIsNullable("t", "c")).ShouldBeTrue();
     }
 
     [Fact]
-    public async Task AlterColumn_TypeAndNullabilityTogether_FoldIntoOneStatement()
+    public async Task AlterColumn_TypeAndNullabilityTogether_EndsWithTheFinalColumn()
     {
         await Exec($"CREATE TABLE [{_schema}].[t] (c int NULL)");
 
-        // Both actions for one column; the generator emits a single ALTER COLUMN. (Two ALTER COLUMNs would also work,
-        // but folding is what the generator does — and the column must end as bigint NOT NULL.)
-        var plan = _generator.Generate(new MigrationPlan(
-        [
-            new AlterColumnType(_schema, "t", "c", SqlType.Int, SqlType.BigInt, IsNullable: false),
-            new AlterColumnNullability(_schema, "t", "c", OldNullable: true, NewNullable: false, ColumnType: SqlType.BigInt),
-        ], [], []));
-
-        plan.Statements.Count(s => s.Sql.Contains("ALTER COLUMN")).ShouldBe(1);
-        foreach (var statement in plan.Statements)
-        {
-            await Exec(statement.Sql);
-        }
+        // Both actions carry the column's complete final state, so each renders a full (idempotent) ALTER COLUMN
+        // — and the column must end as bigint NOT NULL.
+        await Apply(
+            new AlterColumnType(Mem("t", "c"), SqlType.Int, SqlType.BigInt, IsNullable: false),
+            new AlterColumnNullability(Mem("t", "c"), OldNullable: true, NewNullable: false, ColumnType: SqlType.BigInt));
 
         (await ColumnType("t", "c")).ShouldBe("bigint");
         (await ColumnIsNullable("t", "c")).ShouldBeFalse();
@@ -139,26 +137,30 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
     {
         await Exec($"CREATE TABLE [{_schema}].[t] (id int, quantity int)");
 
-        await Apply(new SetColumnDefault(_schema, "t", "quantity", null, "0"));
+        await Apply(new SetColumnDefault(Mem("t", "quantity"), null, "0"));
         (await ScalarBool($"SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.default_constraints dc JOIN sys.columns c ON c.object_id=dc.parent_object_id AND c.column_id=dc.parent_column_id WHERE dc.parent_object_id=OBJECT_ID(N'[{_schema}].[t]') AND c.name='quantity') THEN 1 ELSE 0 END AS bit)")).ShouldBeTrue();
 
-        await Apply(new SetColumnDefault(_schema, "t", "quantity", "0", null));
+        await Apply(new SetColumnDefault(Mem("t", "quantity"), "0", null));
         (await ScalarBool($"SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.default_constraints dc JOIN sys.columns c ON c.object_id=dc.parent_object_id AND c.column_id=dc.parent_column_id WHERE dc.parent_object_id=OBJECT_ID(N'[{_schema}].[t]') AND c.name='quantity') THEN 1 ELSE 0 END AS bit)")).ShouldBeFalse();
     }
 
     [Fact]
     public async Task RoundTrip_ComputedColumn_IntrospectsAsGenerated()
     {
-        await Apply(new CreateTable(_schema, new Table("boxes", Columns:
-        [
-            new Column("w", SqlType.Int, IsNullable: false),
-            new Column("h", SqlType.Int, IsNullable: false),
-            new Column("area", SqlType.Int, GeneratedExpression: "w * h"),
-        ])));
+        await Apply(new CreateTable(_schema, new Table
+        {
+            Name = "boxes",
+            Columns =
+            [
+                new Column { Name = "w", Type = SqlType.Int },
+                new Column { Name = "h", Type = SqlType.Int },
+                new Column { Name = "area", Type = SqlType.Int, GeneratedExpression = "w * h" },
+            ],
+        }));
 
         var area = (await Introspect()).Tables.ShouldHaveSingleItem().Columns.Single(c => c.Name == "area");
         area.GeneratedExpression.ShouldNotBeNull();
-        area.GeneratedExpression!.ShouldContain("w");
+        area.GeneratedExpression.Value.ShouldContain("w");
         area.DefaultExpression.ShouldBeNull();
     }
 
@@ -171,9 +173,16 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
         await Exec($"CREATE TABLE [{_schema}].[child] (id int NOT NULL, parent_id int, code varchar(20), balance int)");
 
         await Apply(
-            new AddForeignKey(_schema, "child", new ForeignKey("fk_child_parent", ["parent_id"], _schema, "parent", ["id"], OnDelete: ReferentialAction.Cascade)),
-            new AddUniqueConstraint(_schema, "child", new UniqueConstraint("uq_child_code", ["code"])),
-            new AddCheckConstraint(_schema, "child", new CheckConstraint("ck_child_balance", "balance >= 0")));
+            new AddForeignKey(Obj("child"), new ForeignKey
+            {
+                Name = "fk_child_parent",
+                ColumnNames = [new("parent_id")],
+                References = Obj("parent"),
+                ReferencedColumnNames = [new("id")],
+                OnDelete = ReferentialAction.Cascade,
+            }),
+            new AddUniqueConstraint(Obj("child"), new UniqueConstraint { Name = "uq_child_code", ColumnNames = [new("code")] }),
+            new AddCheckConstraint(Obj("child"), new CheckConstraint { Name = "ck_child_balance", Expression = "balance >= 0" }));
 
         var table = (await Introspect()).Tables.Single(t => t.Name == "child");
         table.ForeignKeys.ShouldHaveSingleItem().Name.ShouldBe("fk_child_parent");
@@ -181,9 +190,9 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
         table.CheckConstraints.ShouldHaveSingleItem().Name.ShouldBe("ck_child_balance");
 
         await Apply(
-            new DropForeignKey(_schema, "child", "fk_child_parent"),
-            new DropUniqueConstraint(_schema, "child", "uq_child_code"),
-            new DropCheckConstraint(_schema, "child", "ck_child_balance"));
+            new DropForeignKey(Mem("child", "fk_child_parent")),
+            new DropUniqueConstraint(Mem("child", "uq_child_code")),
+            new DropCheckConstraint(Mem("child", "ck_child_balance")));
 
         var dropped = (await Introspect()).Tables.Single(t => t.Name == "child");
         dropped.ForeignKeys.ShouldBeEmpty();
@@ -196,18 +205,24 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
     {
         await Exec($"CREATE TABLE [{_schema}].[items] (id int, name varchar(50), qty int)");
 
-        await Apply(new CreateIndex(_schema, "items", new TableIndex("idx_items_rich",
-            [new IndexColumn("id", Sort: IndexSort.Descending)], IsUnique: true, Predicate: "qty > 0", Include: ["name"])));
+        await Apply(new CreateIndex(Obj("items"), new TableIndex
+        {
+            Name = "idx_items_rich",
+            Columns = [new IndexColumn(new SqlIdentifier("id"), Sort: IndexSort.Descending)],
+            IsUnique = true,
+            Predicate = "qty > 0",
+            Include = [new("name")],
+        }));
 
         var index = (await Introspect()).Tables.Single(t => t.Name == "items").Indexes.ShouldHaveSingleItem();
         index.Name.ShouldBe("idx_items_rich");
         index.IsUnique.ShouldBeTrue();
-        index.Include.ShouldBe(["name"]);
+        index.Include.ShouldBe([new SqlIdentifier("name")]);
         index.Columns.ShouldHaveSingleItem().ShouldSatisfyAllConditions(
-            c => c.Expression.ShouldBe("id"),
+            c => c.Column.ShouldBe(new SqlIdentifier("id")),
             c => c.Sort.ShouldBe(IndexSort.Descending));
         index.Predicate.ShouldNotBeNull();
-        index.Predicate!.ShouldContain("qty");
+        index.Predicate.Value.ShouldContain("qty");
     }
 
     // ── Views, sequences, routines ────────────────────────────────────────────
@@ -217,18 +232,18 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
     {
         await Exec($"CREATE TABLE [{_schema}].[users] (id int, email varchar(50))");
 
-        await Apply(new CreateView(_schema, new View("u", $"SELECT id FROM [{_schema}].[users]")));
+        await Apply(new CreateView(_schema, new View { Name = "u", Body = $"SELECT id FROM [{_schema}].[users]" }));
         // CREATE OR ALTER replaces in place.
-        await Apply(new CreateView(_schema, new View("u", $"SELECT id, email FROM [{_schema}].[users]")));
+        await Apply(new CreateView(_schema, new View { Name = "u", Body = $"SELECT id, email FROM [{_schema}].[users]" }));
 
         var view = (await Introspect()).Views.ShouldHaveSingleItem();
         view.Name.ShouldBe("u");
-        view.Body.ShouldContain("email");
+        view.Body.Value.ShouldContain("email");
 
-        await Apply(new RenameView(_schema, "u", "u2"));
+        await Apply(new RenameView(Obj("u"), "u2"));
         (await Introspect()).Views.ShouldHaveSingleItem().Name.ShouldBe("u2");
 
-        await Apply(new DropView(_schema, "u2"));
+        await Apply(new DropView(Obj("u2")));
         (await Introspect()).Views.ShouldBeEmpty();
     }
 
@@ -237,7 +252,7 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
     {
         var options = new SequenceOptions(SqlType.Int, StartWith: 20, IncrementBy: 5, MinValue: 10, MaxValue: 1000, Cache: 10, Cycle: true);
 
-        await Apply(new CreateSequence(_schema, new Sequence("order_id", options)));
+        await Apply(new CreateSequence(_schema, new Sequence { Name = "order_id", Options = options }));
 
         (await Introspect()).Sequences.ShouldHaveSingleItem().Options.ShouldBe(options);
     }
@@ -245,7 +260,7 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
     [Fact]
     public async Task RoundTrip_BareSequence_IntrospectsToAllNullOptions()
     {
-        await Apply(new CreateSequence(_schema, new Sequence("order_id")));
+        await Apply(new CreateSequence(_schema, new Sequence { Name = "order_id" }));
 
         (await Introspect()).Sequences.ShouldHaveSingleItem().Options.ShouldBe(new SequenceOptions());
     }
@@ -253,16 +268,26 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
     [Fact]
     public async Task Function_CreateRecreateDrop()
     {
-        await Apply(new CreateRoutine(_schema, new Routine("add_one", RoutineKind.Function, "@a int",
-            "RETURNS int AS BEGIN RETURN @a + 1 END")));
+        await Apply(new CreateRoutine(_schema, new Routine
+        {
+            Name = "add_one",
+            RoutineKind = RoutineKind.Function,
+            Arguments = "@a int",
+            Definition = "RETURNS int AS BEGIN RETURN @a + 1 END",
+        }));
         (await ScalarInt($"SELECT [{_schema}].[add_one](41)")).ShouldBe(42);
 
         // A signature change is replaced in place by CREATE OR ALTER (no overload, no lost comment).
-        await Apply(new RecreateRoutine(_schema, new Routine("add_one", RoutineKind.Function, "@a int, @b int",
-            "RETURNS int AS BEGIN RETURN @a + @b END")));
+        await Apply(new RecreateRoutine(_schema, new Routine
+        {
+            Name = "add_one",
+            RoutineKind = RoutineKind.Function,
+            Arguments = "@a int, @b int",
+            Definition = "RETURNS int AS BEGIN RETURN @a + @b END",
+        }));
         (await ScalarInt($"SELECT [{_schema}].[add_one](40, 2)")).ShouldBe(42);
 
-        await Apply(new DropRoutine(_schema, "add_one", RoutineKind.Function));
+        await Apply(new DropRoutine(Obj("add_one"), RoutineKind.Function));
         (await ScalarBool($"SELECT CAST(CASE WHEN OBJECT_ID(N'[{_schema}].[add_one]') IS NOT NULL THEN 1 ELSE 0 END AS bit)")).ShouldBeFalse();
     }
 
@@ -271,12 +296,17 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
     {
         await Exec($"CREATE TABLE [{_schema}].[log] (msg varchar(100))");
 
-        await Apply(new CreateRoutine(_schema, new Routine("write_log", RoutineKind.Procedure, "@msg varchar(100)",
-            $"AS BEGIN INSERT INTO [{_schema}].[log] (msg) VALUES (@msg) END")));
+        await Apply(new CreateRoutine(_schema, new Routine
+        {
+            Name = "write_log",
+            RoutineKind = RoutineKind.Procedure,
+            Arguments = "@msg varchar(100)",
+            Definition = $"AS BEGIN INSERT INTO [{_schema}].[log] (msg) VALUES (@msg) END",
+        }));
         await Exec($"EXEC [{_schema}].[write_log] @msg = 'hi'");
         (await ScalarString($"SELECT msg FROM [{_schema}].[log]")).ShouldBe("hi");
 
-        await Apply(new DropRoutine(_schema, "write_log", RoutineKind.Procedure));
+        await Apply(new DropRoutine(Obj("write_log"), RoutineKind.Procedure));
         (await ScalarBool($"SELECT CAST(CASE WHEN OBJECT_ID(N'[{_schema}].[write_log]') IS NOT NULL THEN 1 ELSE 0 END AS bit)")).ShouldBeFalse();
     }
 
@@ -287,16 +317,21 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
     {
         await Exec($"CREATE TABLE [{_schema}].[users] (id int)");
         await Exec($"CREATE TABLE [{_schema}].[audit] (msg varchar(50), n int)");
-        // A genuinely multi-statement body (its own internal ';') exercised end to end: generate → execute → introspect.
-        var trigger = new Trigger("users_audit", TriggerTiming.After, TriggerEvent.Insert | TriggerEvent.Update,
-            Body: $"""
+        // A genuinely multi-statement body (its own internal ';') exercised end to end: render → execute → introspect.
+        var trigger = new Trigger
+        {
+            Name = "users_audit",
+            Timing = TriggerTiming.After,
+            Events = TriggerEvent.Insert | TriggerEvent.Update,
+            Body = $"""
                 BEGIN
                     DECLARE @c int = (SELECT COUNT(*) FROM inserted);
                     INSERT INTO [{_schema}].[audit] (msg, n) VALUES ('changed', @c);
                 END
-                """);
+                """,
+        };
 
-        await Apply(new CreateTrigger(_schema, "users", trigger));
+        await Apply(new CreateTrigger(Obj("users"), trigger));
 
         var introspected = (await Introspect()).Tables.Single(t => t.Name == "users").Triggers.ShouldHaveSingleItem();
         introspected.Name.ShouldBe("users_audit");
@@ -305,8 +340,8 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
         introspected.Level.ShouldBe(TriggerLevel.Statement);
         introspected.Function.ShouldBeNull();
         introspected.Body.ShouldNotBeNull();
-        introspected.Body!.ShouldContain("DECLARE");
-        introspected.Body.ShouldContain("INSERT INTO");
+        introspected.Body.Value.ShouldContain("DECLARE");
+        introspected.Body.Value.ShouldContain("INSERT INTO");
 
         // CREATE OR ALTER replaces in place; the trigger fires and the body's multiple statements run (an audit row
         // recording the inserted count lands).
@@ -314,10 +349,10 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
         (await ScalarInt($"SELECT n FROM [{_schema}].[audit]")).ShouldBe(1);
 
         // Comment, then drop.
-        await Apply(new SetTriggerComment(_schema, "users", "users_audit", null, "audit changes"));
+        await Apply(new SetTriggerComment(Mem("users", "users_audit"), null, "audit changes"));
         (await Introspect()).Tables.Single(t => t.Name == "users").Triggers.ShouldHaveSingleItem().Comment.ShouldBe("audit changes");
 
-        await Apply(new DropTrigger(_schema, "users", "users_audit"));
+        await Apply(new DropTrigger(Mem("users", "users_audit")));
         (await Introspect()).Tables.Single(t => t.Name == "users").Triggers.ShouldBeEmpty();
     }
 
@@ -325,10 +360,15 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
     public async Task RoundTrip_InsteadOfTrigger_IntrospectsTiming()
     {
         await Exec($"CREATE TABLE [{_schema}].[t] (id int)");
-        var trigger = new Trigger("t_guard", TriggerTiming.InsteadOf, TriggerEvent.Delete,
-            Body: "BEGIN RETURN; END");
+        var trigger = new Trigger
+        {
+            Name = "t_guard",
+            Timing = TriggerTiming.InsteadOf,
+            Events = TriggerEvent.Delete,
+            Body = "BEGIN RETURN; END",
+        };
 
-        await Apply(new CreateTrigger(_schema, "t", trigger));
+        await Apply(new CreateTrigger(Obj("t"), trigger));
 
         var introspected = (await Introspect()).Tables.Single(t => t.Name == "t").Triggers.ShouldHaveSingleItem();
         introspected.Timing.ShouldBe(TriggerTiming.InsteadOf);
@@ -338,10 +378,21 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
     [Fact]
     public void BeforeTrigger_IsRejected()
     {
-        var plan = new MigrationPlan([new CreateTrigger(_schema, "users",
-            new Trigger("t", TriggerTiming.Before, TriggerEvent.Insert, Body: "BEGIN END"))], [], []);
+        // Arrange
+        var action = new CreateTrigger(Obj("users"), new Trigger
+        {
+            Name = "t",
+            Timing = TriggerTiming.Before,
+            Events = TriggerEvent.Insert,
+            Body = "BEGIN END",
+        });
 
-        Should.Throw<NotSupportedException>(() => _generator.Generate(plan));
+        // Act
+        var result = _sut.Generate(action);
+
+        // Assert — a facet SQL Server cannot express is an error diagnostic that blocks the plan, not an exception.
+        result.IsFailure.ShouldBeTrue();
+        result.Errors.ShouldHaveSingleItem().Message.ShouldContain("BEFORE");
     }
 
     // ── Comments, grants ──────────────────────────────────────────────────────
@@ -352,18 +403,18 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
         await Exec($"CREATE TABLE [{_schema}].[users] (id int, email varchar(50))");
 
         await Apply(
-            new SetTableComment(_schema, "users", null, "Registered users"),
-            new SetColumnComment(_schema, "users", "email", null, "Login address"));
+            new SetTableComment(Obj("users"), null, "Registered users"),
+            new SetColumnComment(Mem("users", "email"), null, "Login address"));
 
         var table = (await Introspect()).Tables.ShouldHaveSingleItem();
         table.Comment.ShouldBe("Registered users");
         table.Columns.Single(c => c.Name == "email").Comment.ShouldBe("Login address");
 
         // Update then clear the table comment.
-        await Apply(new SetTableComment(_schema, "users", "Registered users", "All users"));
+        await Apply(new SetTableComment(Obj("users"), "Registered users", "All users"));
         (await Introspect()).Tables.ShouldHaveSingleItem().Comment.ShouldBe("All users");
 
-        await Apply(new SetTableComment(_schema, "users", "All users", null));
+        await Apply(new SetTableComment(Obj("users"), "All users", null));
         (await Introspect()).Tables.ShouldHaveSingleItem().Comment.ShouldBeNull();
     }
 
@@ -373,9 +424,9 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
         await Exec($"CREATE TABLE [{_schema}].[users] (id int)");
         await Exec($"CREATE ROLE [{_schema}_role]");
 
-        await Apply(new GrantTablePrivileges(_schema, "users", $"{_schema}_role", TablePrivilege.Select | TablePrivilege.Insert));
+        await Apply(new GrantTablePrivileges(Obj("users"), $"{_schema}_role", TablePrivilege.Select | TablePrivilege.Insert));
 
-        // Deterministic: the generated GRANT lands in the catalog (SELECT + INSERT to the role).
+        // Deterministic: the rendered GRANT lands in the catalog (SELECT + INSERT to the role).
         var granted = await ScalarInt($"""
             SELECT COUNT(*) FROM sys.database_permissions dp
             JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
@@ -384,7 +435,7 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
             """);
         granted.ShouldBe(2);
 
-        // The provider surfaces the grant. SQL Server can briefly hide a freshly-permissioned object from a new
+        // The introspector surfaces the grant. SQL Server can briefly hide a freshly-permissioned object from a new
         // connection's catalog read, so this tolerates a short metadata-propagation lag (not an issue in normal use,
         // where introspection precedes apply on a settled database).
         var grant = await Eventually(async () =>
@@ -398,10 +449,10 @@ public sealed class SqlServerSqlGeneratorTests(SqlServerContainerFixture fixture
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private async Task<NSchema.Schema.Model.Schemas.SchemaDefinition> Introspect()
+    private async Task<NSchema.Model.Schemas.Schema> Introspect()
     {
-        var schema = await _provider.GetSchema([_schema], TestContext.Current.CancellationToken);
-        return schema.Schemas.Single(s => s.Name == _schema);
+        var database = await _introspector.GetDatabase(PlanningScope.To(new SqlIdentifier(_schema)), TestContext.Current.CancellationToken);
+        return database.Schemas.Single(s => s.Name == _schema);
     }
 
     // Retries a read until it returns a non-null result, tolerating SQL Server's brief metadata-propagation lag after

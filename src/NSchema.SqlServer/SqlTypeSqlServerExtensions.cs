@@ -1,4 +1,4 @@
-using NSchema.Schema.Model.Columns;
+using NSchema.Model.Columns;
 
 namespace NSchema.SqlServer;
 

@@ -1,0 +1,10 @@
+﻿[
+  {
+    Sql: CREATE SCHEMA [sales],
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: DROP SCHEMA [sales],
+    RunOutsideTransaction: false
+  }
+]

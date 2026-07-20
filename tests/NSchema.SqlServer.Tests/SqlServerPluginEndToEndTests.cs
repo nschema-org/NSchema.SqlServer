@@ -1,8 +1,7 @@
 using Microsoft.Data.SqlClient;
-using NSchema.Configuration;
-using NSchema.Operations.Apply;
-using NSchema.Operations.Plan;
-using NSchema.Sql.Model;
+using NSchema.Model;
+using NSchema.Operations;
+using NSchema.Plugins;
 using NSchema.SqlServer.Sql;
 using NSchema.SqlServer.Tests.Fixtures;
 
@@ -10,7 +9,7 @@ namespace NSchema.SqlServer.Tests;
 
 /// <summary>
 /// End-to-end proof that the <see cref="SqlServerPlugin"/> manifest wires a fully working provider: it runs a real
-/// migration THROUGH the plugin's <c>Configure</c> (not the direct <c>UseSqlServerSchema</c> API) against a real SQL
+/// migration THROUGH the plugin's <c>Configure</c> (not the direct <c>UseSqlServer</c> API) against a real SQL
 /// Server container, then re-introspects to confirm the schema was applied. Requires Docker.
 /// </summary>
 [Collection("sqlserver")]
@@ -48,30 +47,30 @@ public sealed class SqlServerPluginEndToEndTests(SqlServerContainerFixture fixtu
             """, TestContext.Current.CancellationToken);
 
         var builder = NSchemaApplication.CreateBuilder();
-        var configured = new SqlServerPlugin().Configure(builder, new ConfigBlock("provider", "sqlserver", new Dictionary<string, ConfigValue>
-        {
-            ["connection_string"] = ConfigValue.OfString(fixture.ConnectionString),
-        }));
-        configured.Succeeded.ShouldBeTrue();
+        new SqlServerPlugin().Configure(builder, Config()).IsSuccess.ShouldBeTrue();
 
-        builder.AddDdlSchemas(_projectDir);
+        builder.AddProjectSource(_projectDir);
+        // Planning requires a state store; nothing here needs to outlive the app, so an in-memory one suffices.
+        builder.UseEphemeralState();
         using var app = builder.Build();
 
-        // Act — a real plan + apply through the plugin-wired provider.
-        var planResult = await app.Operations.Plan(new PlanArguments { Schemas = [_schema], Target = PlanTarget.Live }, TestContext.Current.CancellationToken);
+        // Act — a real plan + apply through the plugin-wired provider. Nothing is on record, so the whole declared
+        // schema plans as an add.
+        var planResult = await app.Operations.Plan(new PlanArguments { Scope = Scope() }, TestContext.Current.CancellationToken);
         planResult.IsSuccess.ShouldBeTrue();
-        await app.Operations.Apply(new ApplyArguments { Sql = planResult.Value!.Sql ?? new SqlPlan([]) }, TestContext.Current.CancellationToken);
+        var applyResult = await app.Operations.Apply(new ApplyArguments { Plan = planResult.Value.Plan! }, TestContext.Current.CancellationToken);
+        applyResult.IsSuccess.ShouldBeTrue();
 
         // Assert — the table really exists, read back via a fresh introspection.
-        var live = await new SqlServerSchemaProvider(new SqlServerConnectionSource(fixture.ConnectionString))
-            .GetSchema([_schema], TestContext.Current.CancellationToken);
+        var live = await new SqlServerDatabaseIntrospector(new SqlServerConnectionSource(fixture.ConnectionString))
+            .GetDatabase(Scope(), TestContext.Current.CancellationToken);
         var table = live.Schemas.ShouldHaveSingleItem().Tables.ShouldHaveSingleItem();
         table.Name.ShouldBe("widgets");
-        table.Columns.Select(column => column.Name).ShouldBe(["id", "name"]);
+        table.Columns.Select(column => column.Name).ShouldBe([new SqlIdentifier("id"), new SqlIdentifier("name")]);
     }
 
     [Fact]
-    public async Task Apply_WithDataMigration_BackfillsANewNotNullColumnOnAPopulatedTable()
+    public async Task Apply_WithChangeScript_BackfillsANewNotNullColumnOnAPopulatedTable()
     {
         // Arrange — a live baseline table that already holds a row, created out of band.
         await using var conn = new SqlConnection(fixture.ConnectionString);
@@ -81,7 +80,7 @@ public sealed class SqlServerPluginEndToEndTests(SqlServerContainerFixture fixtu
         await Exec(conn, $"INSERT INTO [{_schema}].[users] (id, login) VALUES (1, 'alice')");
 
         // The desired schema adds a NOT NULL column with no default — only possible on a populated table because
-        // the matched migration backfills it (the core plans: add nullable → run the SQL → tighten to NOT NULL).
+        // the matched change script backfills it (the core plans: add nullable → run the SQL → tighten to NOT NULL).
         await File.WriteAllTextAsync(Path.Combine(_projectDir, "schema.sql"), $"""
             CREATE SCHEMA {_schema};
 
@@ -92,31 +91,38 @@ public sealed class SqlServerPluginEndToEndTests(SqlServerContainerFixture fixtu
               CONSTRAINT users_pkey PRIMARY KEY (id)
             );
 
-            MIGRATION 'backfill' FOR ADD COLUMN {_schema}.users.email AS $$
+            SCRIPT backfill RUN ON ADD COLUMN {_schema}.users.email AS $$
               UPDATE {_schema}.users SET email = login + '@example.com' WHERE email IS NULL;
             $$;
             """, TestContext.Current.CancellationToken);
 
         var builder = NSchemaApplication.CreateBuilder();
-        new SqlServerPlugin().Configure(builder, new ConfigBlock("provider", "sqlserver", new Dictionary<string, ConfigValue>
-        {
-            ["connection_string"] = ConfigValue.OfString(fixture.ConnectionString),
-        })).Succeeded.ShouldBeTrue();
+        new SqlServerPlugin().Configure(builder, Config()).IsSuccess.ShouldBeTrue();
 
-        builder.AddDdlSchemas(_projectDir);
+        builder.AddProjectSource(_projectDir);
+        builder.UseEphemeralState();
         using var app = builder.Build();
 
-        // Act — plan against the live database and apply.
-        var planResult = await app.Operations.Plan(new PlanArguments { Schemas = [_schema], Target = PlanTarget.Live }, TestContext.Current.CancellationToken);
+        // Act — a plan diffs recorded state against the project, so the refresh is what puts the live baseline on
+        // record (and makes the new column an ADD COLUMN the script can attach to).
+        (await app.Operations.Refresh(new RefreshArguments(), TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+        var planResult = await app.Operations.Plan(new PlanArguments { Scope = Scope() }, TestContext.Current.CancellationToken);
         planResult.IsSuccess.ShouldBeTrue();
-        var applyResult = await app.Operations.Apply(new ApplyArguments { Sql = planResult.Value!.Sql ?? new SqlPlan([]) }, TestContext.Current.CancellationToken);
+        var applyResult = await app.Operations.Apply(new ApplyArguments { Plan = planResult.Value.Plan! }, TestContext.Current.CancellationToken);
         applyResult.IsSuccess.ShouldBeTrue();
 
-        // Assert — the column ended NOT NULL and the existing row was backfilled by the migration SQL.
+        // Assert — the column ended NOT NULL and the existing row was backfilled by the script's SQL.
         (await Scalar(conn, $"SELECT is_nullable FROM sys.columns WHERE object_id = OBJECT_ID(N'[{_schema}].[users]') AND name = 'email'"))
             .ShouldBe(false);
         (await Scalar(conn, $"SELECT email FROM [{_schema}].[users] WHERE id = 1")).ShouldBe("alice@example.com");
     }
+
+    private PlanningScope Scope() => PlanningScope.To(new SqlIdentifier(_schema));
+
+    private PluginConfig Config() => new(new PluginLabel("sqlserver"), new Dictionary<AttributeKey, ConfigValue>
+    {
+        [new AttributeKey("connection_string")] = ConfigValue.OfString(fixture.ConnectionString),
+    });
 
     private static async Task Exec(SqlConnection conn, string sql)
     {

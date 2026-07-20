@@ -1,0 +1,18 @@
+﻿[
+  {
+    Sql: CREATE UNIQUE INDEX [idx_users_email] ON [dbo].[users] ([email]),
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: CREATE INDEX [idx_users_active] ON [dbo].[users] ([created_at]) WHERE notes IS NOT NULL,
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: CREATE INDEX [idx_users_recent] ON [dbo].[users] ([created_at] DESC) INCLUDE ([id], [notes]),
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: DROP INDEX [idx_users_email] ON [dbo].[users],
+    RunOutsideTransaction: false
+  }
+]

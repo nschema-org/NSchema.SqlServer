@@ -17,11 +17,11 @@ public static class NSchemaApplicationBuilderExtensions
         /// </summary>
         /// <param name="connectionString">The connection string to the SQL Server database.</param>
         /// <returns>The <see cref="NSchemaApplicationBuilder"/> instance, allowing for method chaining.</returns>
-        public NSchemaApplicationBuilder UseSqlServerSchema(string connectionString)
+        public NSchemaApplicationBuilder UseSqlServer(string connectionString)
         {
             builder.Services.AddSingleton(_ => new SqlServerConnectionSource(connectionString));
             builder.Services.AddSingleton<DbDataSource>(p => p.GetRequiredService<SqlServerConnectionSource>());
-            return builder.UseSqlServerSchema();
+            return builder.UseSqlServer();
         }
 
         /// <summary>
@@ -30,27 +30,27 @@ public static class NSchemaApplicationBuilderExtensions
         /// </summary>
         /// <param name="configure">A delegate that configures the <see cref="SqlConnectionStringBuilder"/>.</param>
         /// <returns>The <see cref="NSchemaApplicationBuilder"/> instance, allowing for method chaining.</returns>
-        public NSchemaApplicationBuilder UseSqlServerSchema(Action<SqlConnectionStringBuilder> configure)
+        public NSchemaApplicationBuilder UseSqlServer(Action<SqlConnectionStringBuilder> configure)
         {
             var connectionStringBuilder = new SqlConnectionStringBuilder();
             configure(connectionStringBuilder);
-            return builder.UseSqlServerSchema(connectionStringBuilder.ConnectionString);
+            return builder.UseSqlServer(connectionStringBuilder.ConnectionString);
         }
 
         /// <summary>
-        /// Configures NSchema to use SQL Server as the database provider by registering the schema provider and SQL
-        /// generator. A <see cref="SqlServerConnectionSource"/> (and the <see cref="DbDataSource"/> the executor needs)
-        /// must already be registered (use one of the overloads that accept a connection string to register them).
+        /// Configures NSchema to use SQL Server as the database provider by registering the database introspector and
+        /// SQL dialect. A <see cref="SqlServerConnectionSource"/> (and the <see cref="DbDataSource"/> the executor
+        /// needs) must already be registered (use one of the overloads that accept a connection string to register them).
         /// </summary>
         /// <returns>The <see cref="NSchemaApplicationBuilder"/> instance, allowing for method chaining.</returns>
-        public NSchemaApplicationBuilder UseSqlServerSchema() => builder
-            .UseCurrentSchema<SqlServerSchemaProvider>()
-            .UseSqlServerGenerator();
+        public NSchemaApplicationBuilder UseSqlServer() => builder
+            .UseDatabaseIntrospector<SqlServerDatabaseIntrospector>()
+            .UseSqlServerDialect();
 
         /// <summary>
-        /// Configures the NSchema application to generate SQL for SQL Server.
+        /// Configures the NSchema application to render SQL for SQL Server.
         /// </summary>
         /// <returns>The <see cref="NSchemaApplicationBuilder"/> instance, allowing for method chaining.</returns>
-        public NSchemaApplicationBuilder UseSqlServerGenerator() => builder.UseSqlGenerator<SqlServerSqlGenerator>();
+        public NSchemaApplicationBuilder UseSqlServerDialect() => builder.UseSqlDialect<SqlServerSqlDialect>();
     }
 }

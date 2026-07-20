@@ -1,31 +1,31 @@
 using System.Data.Common;
 using System.Text.RegularExpressions;
-using NSchema.Schema;
-using NSchema.Schema.Model;
-using NSchema.Schema.Model.Columns;
-using NSchema.Schema.Model.Constraints;
-using NSchema.Schema.Model.Indexes;
-using NSchema.Schema.Model.Routines;
-using NSchema.Schema.Model.Schemas;
-using NSchema.Schema.Model.Sequences;
-using NSchema.Schema.Model.Tables;
-using NSchema.Schema.Model.Triggers;
-using NSchema.Schema.Model.Views;
+using NSchema.Deployment.Backends;
+using NSchema.Model;
+using NSchema.Model.Columns;
+using NSchema.Model.Constraints;
+using NSchema.Model.Indexes;
+using NSchema.Model.Routines;
+using NSchema.Model.Schemas;
+using NSchema.Model.Sequences;
+using NSchema.Model.Tables;
+using NSchema.Model.Triggers;
+using NSchema.Model.Views;
 
 namespace NSchema.SqlServer.Sql;
 
 /// <summary>
-/// Reads a live SQL Server database into an NSchema <see cref="DatabaseSchema"/> via the <c>sys.*</c> catalog views.
+/// Reads a live SQL Server database into an NSchema <see cref="Database"/> via the <c>sys.*</c> catalog views.
 /// </summary>
 /// <remarks>
 /// A fixed sequence of independent queries runs against one connection opened from the injected
-/// <see cref="SqlServerConnectionSource"/>; each is scoped by an optional schema-name filter (<c>null</c>/empty means
-/// "all user schemas"). Only the surfaces the generator can produce are introspected — enums, domains, composite types
+/// <see cref="SqlServerConnectionSource"/>; each is scoped by the planning scope's schema names (unscoped means
+/// "all user schemas"). Only the surfaces the dialect can produce are introspected — enums, domains, composite types
 /// and extensions are out of scope. View bodies, routine modules and trigger bodies come from <c>sys.sql_modules</c>
 /// (the database's stored form) so an <c>apply</c> round-trips; identity, computed columns, trigger events and
 /// extended-property comments are read from their dedicated catalog views.
 /// </remarks>
-internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource source) : ISchemaProvider
+internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionSource source) : IDatabaseIntrospector
 {
     private const string DescriptionProperty = "MS_Description";
 
@@ -39,9 +39,9 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
 
     private const string SchemaScopeFilter = "(@schemas IS NULL OR s.name IN (SELECT value FROM STRING_SPLIT(@schemas, ',')))";
 
-    public async ValueTask<DatabaseSchema> GetSchema(string[]? schemaNames = null, CancellationToken cancellationToken = default)
+    public async ValueTask<Database> GetDatabase(PlanningScope scope, CancellationToken cancellationToken = default)
     {
-        var schemas = schemaNames is { Length: > 0 } ? schemaNames : null;
+        var schemas = scope.IsUnscoped ? null : scope.SchemaNames.Select(s => s.Value).ToArray();
 
         await using var connection = await source.OpenConnectionAsync(cancellationToken);
 
@@ -367,7 +367,7 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
 
     // ── Model assembly ──────────────────────────────────────────────────────────
 
-    private static DatabaseSchema Build(
+    private static Database Build(
         List<string> schemaNames,
         List<TableRow> tables,
         List<ColumnRow> columns,
@@ -398,13 +398,21 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
 
         var viewsBySchema = views
             .GroupBy(v => v.Schema)
-            .ToDictionary(g => g.Key, g => g.Select(v => new View(v.Name, ExtractViewBody(v.Definition),
-                Comment: viewComments.GetValueOrDefault((v.Schema, v.Name)))).ToList());
+            .ToDictionary(g => g.Key, g => g.Select(v => new View
+            {
+                Name = v.Name,
+                Body = ExtractViewBody(v.Definition),
+                Comment = viewComments.GetValueOrDefault((v.Schema, v.Name)),
+            }).ToList());
 
         var sequencesBySchema = sequences
             .GroupBy(s => s.Schema)
-            .ToDictionary(g => g.Key, g => g.Select(s => new Sequence(s.Name, NormalizeSequenceOptions(s),
-                Comment: sequenceComments.GetValueOrDefault((s.Schema, s.Name)))).ToList());
+            .ToDictionary(g => g.Key, g => g.Select(s => new Sequence
+            {
+                Name = s.Name,
+                Options = NormalizeSequenceOptions(s),
+                Comment = sequenceComments.GetValueOrDefault((s.Schema, s.Name)),
+            }).ToList());
 
         var routinesBySchema = routines
             .GroupBy(r => r.Schema)
@@ -419,15 +427,18 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
             .OrderBy(n => n, StringComparer.Ordinal);
 
         var definitions = allSchemas
-            .Select(name => new SchemaDefinition(name,
-                Comment: schemaComments.GetValueOrDefault((name, name)),
-                Tables: tablesBySchema.GetValueOrDefault(name, []),
-                Views: viewsBySchema.GetValueOrDefault(name, []),
-                Sequences: sequencesBySchema.GetValueOrDefault(name, []),
-                Routines: routinesBySchema.GetValueOrDefault(name, [])))
+            .Select(name => new Schema
+            {
+                Name = name,
+                Comment = schemaComments.GetValueOrDefault((name, name)),
+                Tables = [.. tablesBySchema.GetValueOrDefault(name, [])],
+                Views = [.. viewsBySchema.GetValueOrDefault(name, [])],
+                Sequences = [.. sequencesBySchema.GetValueOrDefault(name, [])],
+                Routines = [.. routinesBySchema.GetValueOrDefault(name, [])],
+            })
             .ToList();
 
-        return new DatabaseSchema(definitions);
+        return new Database { Schemas = definitions };
     }
 
     private static Table BuildTable(
@@ -450,27 +461,39 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
 
         var cols = allColumns
             .Where(c => Owns(c.Schema, c.Table))
-            .Select(c => new Column(c.Name, MapSqlType(c.TypeName, c.MaxLength, c.Precision, c.Scale),
-                IsNullable: c.IsNullable,
-                IsIdentity: c.IsIdentity,
-                DefaultExpression: c.Computed is null ? StripParens(c.Default) : null,
-                Comment: columnComments.GetValueOrDefault((c.Schema, c.Table, c.Name)),
-                IdentityOptions: c.IsIdentity ? new IdentityOptions(c.Seed, null, c.Increment) : null,
-                GeneratedExpression: c.Computed is null ? null : StripParens(c.Computed)))
+            .Select(c => new Column
+            {
+                Name = c.Name,
+                Type = MapSqlType(c.TypeName, c.MaxLength, c.Precision, c.Scale),
+                IsNullable = c.IsNullable,
+                IsIdentity = c.IsIdentity,
+                DefaultExpression = c.Computed is null ? StripParens(c.Default) : null,
+                Comment = columnComments.GetValueOrDefault((c.Schema, c.Table, c.Name)),
+                IdentityOptions = c.IsIdentity ? new IdentityOptions(c.Seed, null, c.Increment) : null,
+                GeneratedExpression = c.Computed is null ? null : StripParens(c.Computed),
+            })
             .ToList();
 
         var primaryKey = allPrimaryKeys
             .Where(k => Owns(k.Schema, k.Table))
             .GroupBy(k => k.Constraint)
-            .Select(g => new PrimaryKey(g.Key, g.Select(k => k.Column).ToList(),
-                constraintComments.GetValueOrDefault((table.Schema, table.Name, g.Key))))
+            .Select(g => new PrimaryKey
+            {
+                Name = g.Key,
+                ColumnNames = g.Select(k => new SqlIdentifier(k.Column)).ToList(),
+                Comment = constraintComments.GetValueOrDefault((table.Schema, table.Name, g.Key)),
+            })
             .FirstOrDefault();
 
         var uniques = allUniqueConstraints
             .Where(k => Owns(k.Schema, k.Table))
             .GroupBy(k => k.Constraint)
-            .Select(g => new UniqueConstraint(g.Key, g.Select(k => k.Column).ToList(),
-                constraintComments.GetValueOrDefault((table.Schema, table.Name, g.Key))))
+            .Select(g => new UniqueConstraint
+            {
+                Name = g.Key,
+                ColumnNames = g.Select(k => new SqlIdentifier(k.Column)).ToList(),
+                Comment = constraintComments.GetValueOrDefault((table.Schema, table.Name, g.Key)),
+            })
             .ToList();
 
         var foreignKeys = allForeignKeys
@@ -479,18 +502,27 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
             .Select(g =>
             {
                 var first = g.First();
-                return new ForeignKey(g.Key,
-                    g.Select(f => f.Column).ToList(),
-                    first.RefSchema, first.RefTable, g.Select(f => f.RefColumn).ToList(),
-                    MapReferentialAction(first.DeleteAction), MapReferentialAction(first.UpdateAction),
-                    constraintComments.GetValueOrDefault((table.Schema, table.Name, g.Key)));
+                return new ForeignKey
+                {
+                    Name = g.Key,
+                    ColumnNames = g.Select(f => new SqlIdentifier(f.Column)).ToList(),
+                    References = new ObjectAddress(first.RefSchema, first.RefTable),
+                    ReferencedColumnNames = g.Select(f => new SqlIdentifier(f.RefColumn)).ToList(),
+                    OnDelete = MapReferentialAction(first.DeleteAction),
+                    OnUpdate = MapReferentialAction(first.UpdateAction),
+                    Comment = constraintComments.GetValueOrDefault((table.Schema, table.Name, g.Key)),
+                };
             })
             .ToList();
 
         var checks = allChecks
             .Where(c => Owns(c.Schema, c.Table))
-            .Select(c => new CheckConstraint(c.Name, StripParens(c.Definition) ?? c.Definition,
-                constraintComments.GetValueOrDefault((table.Schema, table.Name, c.Name))))
+            .Select(c => new CheckConstraint
+            {
+                Name = c.Name,
+                Expression = StripParens(c.Definition) ?? c.Definition,
+                Comment = constraintComments.GetValueOrDefault((table.Schema, table.Name, c.Name)),
+            })
             .ToList();
 
         var indexes = allIndexes
@@ -511,16 +543,19 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
             .Select(g => BuildTrigger(g.Key, g.ToList(), triggerComments.GetValueOrDefault((table.Schema, table.Name, g.Key))))
             .ToList();
 
-        return new Table(table.Name,
-            PrimaryKey: primaryKey,
-            Comment: tableComments.GetValueOrDefault((table.Schema, table.Name)),
-            Columns: cols,
-            ForeignKeys: foreignKeys,
-            UniqueConstraints: uniques,
-            CheckConstraints: checks,
-            Indexes: indexes,
-            Grants: grants,
-            Triggers: triggers);
+        return new Table
+        {
+            Name = table.Name,
+            PrimaryKey = primaryKey,
+            Comment = tableComments.GetValueOrDefault((table.Schema, table.Name)),
+            Columns = [.. cols],
+            ForeignKeys = [.. foreignKeys],
+            UniqueConstraints = [.. uniques],
+            CheckConstraints = [.. checks],
+            Indexes = [.. indexes],
+            Grants = grants,
+            Triggers = [.. triggers],
+        };
     }
 
     // A SQL Server trigger is statement-level, fires AFTER or INSTEAD OF (never BEFORE), and runs an inline body — so
@@ -537,9 +572,16 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
         });
 
         var first = rows[0];
-        var timing = first.IsInsteadOf ? TriggerTiming.InsteadOf : TriggerTiming.After;
-        return new Trigger(name, timing, events, Function: null, Level: TriggerLevel.Statement,
-            Comment: comment, Body: ExtractTriggerBody(first.Definition));
+        return new Trigger
+        {
+            Name = name,
+            Timing = first.IsInsteadOf ? TriggerTiming.InsteadOf : TriggerTiming.After,
+            Events = events,
+            Function = null,
+            Level = TriggerLevel.Statement,
+            Comment = comment,
+            Body = ExtractTriggerBody(first.Definition),
+        };
     }
 
     private static TablePrivilege ToTablePrivilege(IEnumerable<string> privileges) =>
@@ -555,18 +597,33 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
     private static TableIndex BuildIndex(string name, List<IndexColumnRow> columns, string? comment)
     {
         var keys = columns.Where(c => !c.IsIncluded)
-            .Select(c => new IndexColumn(c.Column, Sort: c.IsDescending ? IndexSort.Descending : IndexSort.Default))
+            .Select(c => new IndexColumn(new SqlIdentifier(c.Column), Sort: c.IsDescending ? IndexSort.Descending : IndexSort.Default))
             .ToList();
-        var include = columns.Where(c => c.IsIncluded).Select(c => c.Column).ToList();
+        var include = columns.Where(c => c.IsIncluded).Select(c => new SqlIdentifier(c.Column)).ToList();
         var first = columns[0];
-        return new TableIndex(name, keys, first.IsUnique, comment, StripParens(first.Filter), Method: null, include);
+        return new TableIndex
+        {
+            Name = name,
+            Columns = keys,
+            IsUnique = first.IsUnique,
+            Comment = comment,
+            Predicate = StripParens(first.Filter),
+            Method = null,
+            Include = include,
+        };
     }
 
     private static Routine BuildRoutine(RoutineRow row, string? comment)
     {
-        var (arguments, definition) = SplitRoutineModule(row.Definition, row.Name);
-        return new Routine(row.Name, row.IsProcedure ? RoutineKind.Procedure : RoutineKind.Function, arguments, definition,
-            Comment: comment);
+        var (arguments, definition) = SplitRoutineModule(row.Definition);
+        return new Routine
+        {
+            Name = row.Name,
+            RoutineKind = row.IsProcedure ? RoutineKind.Procedure : RoutineKind.Function,
+            Arguments = arguments,
+            Definition = definition,
+            Comment = comment,
+        };
     }
 
     // ── Mapping helpers ───────────────────────────────────────────────────────────
@@ -680,9 +737,9 @@ internal sealed partial class SqlServerSchemaProvider(SqlServerConnectionSource 
     }
 
     // Splits a routine module into the parenthesised argument list and the remaining definition. A procedure declared
-    // without parentheses has its arguments taken as the text up to the first AS, which the generator re-wraps in
+    // without parentheses has its arguments taken as the text up to the first AS, which the dialect re-wraps in
     // parentheses on the next apply.
-    private static (string Arguments, string Definition) SplitRoutineModule(string moduleDefinition, string name)
+    private static (string Arguments, string Definition) SplitRoutineModule(string moduleDefinition)
     {
         var header = RoutineHeader().Match(moduleDefinition);
         var rest = (header.Success ? moduleDefinition[header.Length..] : moduleDefinition).TrimStart();

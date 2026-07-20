@@ -5,7 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace NSchema.SqlServer.Tests;
 
 /// <summary>
-/// Covers the service registrations <see cref="NSchemaApplicationBuilderExtensions"/> makes. The generator/provider
+/// Covers the service registrations <see cref="NSchemaApplicationBuilderExtensions"/> makes. The dialect/introspector
 /// tests drive SQL and introspection directly and never go through DI; these guard the wiring the host (the CLI)
 /// relies on — in particular the <see cref="DbDataSource"/> the core's SQL executor needs to apply a plan.
 /// </summary>
@@ -14,11 +14,11 @@ public sealed class NSchemaApplicationBuilderExtensionsTests
     private const string ConnectionString = "Server=localhost;Database=nschema;Trusted_Connection=True;TrustServerCertificate=True";
 
     [Fact]
-    public void UseSqlServerSchema_RegistersADbDataSource_TheExecutorCanResolve()
+    public void UseSqlServer_RegistersADbDataSource_TheExecutorCanResolve()
     {
         // Arrange — wire the provider exactly as a host does.
         var builder = NSchemaApplication.CreateBuilder();
-        builder.UseSqlServerSchema(ConnectionString);
+        builder.UseSqlServer(ConnectionString);
         using var services = builder.Services.BuildServiceProvider();
 
         // Act — the core SqlExecutor resolves a DbDataSource to apply a plan; without one, apply throws.
@@ -31,14 +31,14 @@ public sealed class NSchemaApplicationBuilderExtensionsTests
     }
 
     [Fact]
-    public void UseSqlServerSchema_ExposesOneConnectionSourceUnderBothFacets()
+    public void UseSqlServer_ExposesOneConnectionSourceUnderBothFacets()
     {
         // Arrange
         var builder = NSchemaApplication.CreateBuilder();
-        builder.UseSqlServerSchema(ConnectionString);
+        builder.UseSqlServer(ConnectionString);
         using var services = builder.Services.BuildServiceProvider();
 
-        // Act — the schema provider reads through SqlServerConnectionSource; the executor writes through DbDataSource.
+        // Act — the introspector reads through SqlServerConnectionSource; the executor writes through DbDataSource.
         var source = services.GetService<SqlServerConnectionSource>();
         var dataSource = services.GetService<DbDataSource>();
 
@@ -48,11 +48,11 @@ public sealed class NSchemaApplicationBuilderExtensionsTests
     }
 
     [Fact]
-    public void UseSqlServerSchema_WithBuilderDelegate_BuildsTheConnectionString()
+    public void UseSqlServer_WithBuilderDelegate_BuildsTheConnectionString()
     {
         // Arrange
         var builder = NSchemaApplication.CreateBuilder();
-        builder.UseSqlServerSchema(b =>
+        builder.UseSqlServer(b =>
         {
             b.DataSource = "localhost";
             b.InitialCatalog = "nschema";

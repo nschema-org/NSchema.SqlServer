@@ -1,9 +1,0 @@
-﻿{
-  Statements: [
-    {
-      Sql: ALTER TABLE [dbo].[users] ALTER COLUMN [age] bigint NOT NULL,
-      RunOutsideTransaction: false
-    }
-  ],
-  IsEmpty: false
-}

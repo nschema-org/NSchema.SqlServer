@@ -1,0 +1,42 @@
+﻿[
+  {
+    Sql: EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Application schema', @level0type = N'SCHEMA', @level0name = N'dbo',
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Registered users', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'users',
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: EXEC sys.sp_updateextendedproperty @name = N'MS_Description', @value = N'All users', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'users',
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Unique login address', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'users', @level2type = N'COLUMN', @level2name = N'email',
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Lookup by email', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'users', @level2type = N'INDEX', @level2name = N'idx_users_email',
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'One row per email', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'users', @level2type = N'CONSTRAINT', @level2name = N'uq_users_email',
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Active users only', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'VIEW', @level1name = N'active_users',
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Order numbers', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'SEQUENCE', @level1name = N'order_id',
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Adds numbers', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'FUNCTION', @level1name = N'add_numbers',
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: EXEC sys.sp_dropextendedproperty @name = N'MS_Description', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'users',
+    RunOutsideTransaction: false
+  }
+]
