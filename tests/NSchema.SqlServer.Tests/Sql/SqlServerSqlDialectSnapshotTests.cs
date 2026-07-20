@@ -1,3 +1,4 @@
+using NSchema.Diff.Model;
 using NSchema.Model;
 using NSchema.Model.Columns;
 using NSchema.Model.Constraints;
@@ -76,6 +77,36 @@ public sealed class SqlServerSqlDialectSnapshotTests
         }));
 
     [Fact]
+    public Task CreateTable_WithInlineConstraints() => VerifyStatements(
+        // A newly-created table carries every constraint inline: primary key, unique, check and foreign key — the
+        // linearizer folds these into CREATE TABLE rather than emitting separate ALTER TABLE adds.
+        new CreateTable("dbo", new Table
+        {
+            Name = "orders",
+            PrimaryKey = new PrimaryKey { Name = "pk_orders", ColumnNames = [new("id")] },
+            Columns =
+            [
+                new Column { Name = "id", Type = SqlType.BigInt, IsNullable = false, IsIdentity = true },
+                new Column { Name = "user_id", Type = SqlType.BigInt, IsNullable = false },
+                new Column { Name = "code", Type = SqlType.VarChar(20), IsNullable = false },
+                new Column { Name = "total", Type = SqlType.Int, IsNullable = false },
+            ],
+            UniqueConstraints = [new UniqueConstraint { Name = "uq_orders_code", ColumnNames = [new("code")] }],
+            CheckConstraints = [new CheckConstraint { Name = "ck_orders_total", Expression = "total >= 0" }],
+            ForeignKeys =
+            [
+                new ForeignKey
+                {
+                    Name = "fk_orders_user",
+                    ColumnNames = [new("user_id")],
+                    References = new ObjectAddress("dbo", "users"),
+                    ReferencedColumnNames = [new("id")],
+                    OnDelete = ReferentialAction.Cascade,
+                },
+            ],
+        }));
+
+    [Fact]
     public Task TableLifecycle() => VerifyStatements(
         new RenameTable(new ObjectAddress("dbo", "old_users"), "users"),
         new DropTable(new ObjectAddress("dbo", "legacy")));
@@ -86,20 +117,15 @@ public sealed class SqlServerSqlDialectSnapshotTests
     public Task ColumnOperations() => VerifyStatements(
         new AddColumn(new ObjectAddress("dbo", "users"), new Column { Name = "age", Type = SqlType.Int, IsNullable = true }),
         new RenameColumn(new MemberAddress("dbo", "users", "age"), "years"),
-        // A standalone type change restates the (unchanged) nullability the core supplies on the action.
-        new AlterColumnType(new MemberAddress("dbo", "users", "years"), SqlType.Int, SqlType.BigInt, IsNullable: true),
-        // A standalone nullability change restates the (unchanged) type the core supplies on the action.
-        new AlterColumnNullability(new MemberAddress("dbo", "users", "notes"), OldNullable: true, NewNullable: false, ColumnType: SqlType.VarChar(200)),
+        new AlterColumn(new ObjectAddress("dbo", "users"), new Column { Name = "years", Type = SqlType.BigInt, IsNullable = true }, Type: new(SqlType.Int, SqlType.BigInt)),
+        new AlterColumn(new ObjectAddress("dbo", "users"), new Column { Name = "notes", Type = SqlType.VarChar(200) }, Nullability: new(true, false)),
         new SetColumnDefault(new MemberAddress("dbo", "users", "years"), null, "0"),
         new SetColumnDefault(new MemberAddress("dbo", "users", "years"), "0", null),
         new DropColumn(new ObjectAddress("dbo", "users"), new Column { Name = "years", Type = SqlType.BigInt }));
 
     [Fact]
-    public Task ColumnTypeAndNullability_EachRestatesTheFullColumn() => VerifyStatements(
-        // Both change for the same column: each action carries the column's complete final state, so each renders
-        // a full ALTER COLUMN (type and nullability restated). The statements are identical and idempotent.
-        new AlterColumnType(new MemberAddress("dbo", "users", "age"), SqlType.Int, SqlType.BigInt, IsNullable: false),
-        new AlterColumnNullability(new MemberAddress("dbo", "users", "age"), OldNullable: true, NewNullable: false, ColumnType: SqlType.BigInt));
+    public Task ColumnTypeAndNullability_RenderAsOneStatement() => VerifyStatements(
+        new AlterColumn(new ObjectAddress("dbo", "users"), new Column { Name = "age", Type = SqlType.BigInt }, Type: new(SqlType.Int, SqlType.BigInt), Nullability: new(true, false)));
 
     [Fact]
     public Task GeneratedColumnOperations() => VerifyStatements(
@@ -281,8 +307,8 @@ public sealed class SqlServerSqlDialectSnapshotTests
         Alter(SqlType.VarBinary(null)),
         Alter(SqlType.Custom("money")));
 
-    private static AlterColumnType Alter(SqlType type) =>
-        new(new MemberAddress("dbo", "t", "c"), SqlType.Int, type, IsNullable: false);
+    private static AlterColumn Alter(SqlType type) =>
+        new(new ObjectAddress("dbo", "t"), new Column { Name = "c", Type = type }, Type: new(SqlType.Int, type));
 
     // ── Unsupported surfaces (error diagnostics, not exceptions) ─────────────────
 
@@ -302,7 +328,7 @@ public sealed class SqlServerSqlDialectSnapshotTests
     [Fact]
     public Task ScriptOperations() => VerifyStatements(
         new ExecuteScript(new ChangeScript("backfill_emails", "UPDATE dbo.users SET email = login + '@example.com' WHERE email IS NULL",
-            "dbo", ChangeTrigger.AddColumn, "users", "email")),
+            new ChangeTarget("dbo", "users", "email", ChangeTrigger.AddColumn))),
         new ExecuteScript(new DeploymentScript("reindex", "ALTER INDEX ALL ON dbo.users REBUILD", null, DeploymentPhase.Post)
         {
             RunOutsideTransaction = true,
@@ -334,5 +360,5 @@ public sealed class SqlServerSqlDialectSnapshotTests
     }
 
     private static ChangeScript Script(string sql) =>
-        new("backfill", sql, "dbo", ChangeTrigger.AddColumn, "users", "email");
+        new("backfill", sql, new ChangeTarget("dbo", "users", "email", ChangeTrigger.AddColumn));
 }

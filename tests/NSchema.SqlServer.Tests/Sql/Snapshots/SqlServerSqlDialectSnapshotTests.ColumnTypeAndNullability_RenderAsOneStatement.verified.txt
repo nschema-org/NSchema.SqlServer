@@ -2,9 +2,5 @@
   {
     Sql: ALTER TABLE [dbo].[users] ALTER COLUMN [age] bigint NOT NULL,
     RunOutsideTransaction: false
-  },
-  {
-    Sql: ALTER TABLE [dbo].[users] ALTER COLUMN [age] bigint NOT NULL,
-    RunOutsideTransaction: false
   }
 ]

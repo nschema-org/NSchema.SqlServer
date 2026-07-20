@@ -1,3 +1,4 @@
+using NSchema.Diff.Model;
 using Microsoft.Data.SqlClient;
 using NSchema.Model;
 using NSchema.Model.Columns;
@@ -94,24 +95,23 @@ public sealed class SqlServerSqlDialectTests(SqlServerContainerFixture fixture) 
     }
 
     [Fact]
-    public async Task AlterColumnType_PreservesNotNull_WhenOnlyTypeChanges()
+    public async Task AlterColumn_PreservesNotNull_WhenOnlyTypeChanges()
     {
-        // The SQL Server gotcha: ALTER COLUMN that omits nullability resets the column to NULL. The action carries the
-        // column's (unchanged) nullability so the rendered statement restates NOT NULL.
+        // The SQL Server gotcha: ALTER COLUMN that omits nullability resets the column to NULL.
         await Exec($"CREATE TABLE [{_schema}].[t] (c int NOT NULL)");
 
-        await Apply(new AlterColumnType(Mem("t", "c"), SqlType.Int, SqlType.BigInt, IsNullable: false));
+        await Apply(new AlterColumn(Obj("t"), new Column { Name = "c", Type = SqlType.BigInt }, Type: new(SqlType.Int, SqlType.BigInt)));
 
         (await ColumnType("t", "c")).ShouldBe("bigint");
         (await ColumnIsNullable("t", "c")).ShouldBeFalse();
     }
 
     [Fact]
-    public async Task AlterColumnNullability_RestatesType_WhenOnlyNullabilityChanges()
+    public async Task AlterColumn_RestatesType_WhenOnlyNullabilityChanges()
     {
         await Exec($"CREATE TABLE [{_schema}].[t] (c varchar(50) NOT NULL)");
 
-        await Apply(new AlterColumnNullability(Mem("t", "c"), OldNullable: false, NewNullable: true, ColumnType: SqlType.VarChar(50)));
+        await Apply(new AlterColumn(Obj("t"), new Column { Name = "c", Type = SqlType.VarChar(50), IsNullable = true }, Nullability: new(false, true)));
 
         (await ColumnType("t", "c")).ShouldBe("varchar");
         (await ColumnIsNullable("t", "c")).ShouldBeTrue();
@@ -122,11 +122,7 @@ public sealed class SqlServerSqlDialectTests(SqlServerContainerFixture fixture) 
     {
         await Exec($"CREATE TABLE [{_schema}].[t] (c int NULL)");
 
-        // Both actions carry the column's complete final state, so each renders a full (idempotent) ALTER COLUMN
-        // — and the column must end as bigint NOT NULL.
-        await Apply(
-            new AlterColumnType(Mem("t", "c"), SqlType.Int, SqlType.BigInt, IsNullable: false),
-            new AlterColumnNullability(Mem("t", "c"), OldNullable: true, NewNullable: false, ColumnType: SqlType.BigInt));
+        await Apply(new AlterColumn(Obj("t"), new Column { Name = "c", Type = SqlType.BigInt }, Type: new(SqlType.Int, SqlType.BigInt), Nullability: new(true, false)));
 
         (await ColumnType("t", "c")).ShouldBe("bigint");
         (await ColumnIsNullable("t", "c")).ShouldBeFalse();
