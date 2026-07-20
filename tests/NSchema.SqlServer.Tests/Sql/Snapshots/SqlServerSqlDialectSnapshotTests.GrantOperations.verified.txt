@@ -1,0 +1,14 @@
+﻿[
+  {
+    Sql: GRANT SELECT, INSERT ON [dbo].[users] TO [app_role],
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: GRANT SELECT ON [dbo].[users] TO [readonly],
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: REVOKE SELECT, INSERT, UPDATE, DELETE ON [dbo].[users] FROM [app_role],
+    RunOutsideTransaction: false
+  }
+]

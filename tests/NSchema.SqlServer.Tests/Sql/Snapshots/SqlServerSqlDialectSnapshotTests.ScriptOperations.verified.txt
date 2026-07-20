@@ -1,0 +1,10 @@
+﻿[
+  {
+    Sql: UPDATE dbo.users SET email = login + '@example.com' WHERE email IS NULL,
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: ALTER INDEX ALL ON dbo.users REBUILD,
+    RunOutsideTransaction: true
+  }
+]

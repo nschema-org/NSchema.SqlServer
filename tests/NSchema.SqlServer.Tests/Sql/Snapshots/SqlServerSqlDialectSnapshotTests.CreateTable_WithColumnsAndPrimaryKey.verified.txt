@@ -1,7 +1,6 @@
-﻿{
-  Statements: [
-    {
-      Sql:
+﻿[
+  {
+    Sql:
 CREATE TABLE [dbo].[users] (
     [id] bigint IDENTITY(1, 1) NOT NULL,
     [email] varchar(255) NOT NULL,
@@ -9,8 +8,6 @@ CREATE TABLE [dbo].[users] (
     [notes] varchar(max) NULL,
     CONSTRAINT [pk_users] PRIMARY KEY ([id])
 ),
-      RunOutsideTransaction: false
-    }
-  ],
-  IsEmpty: false
-}
+    RunOutsideTransaction: false
+  }
+]

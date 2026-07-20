@@ -1,0 +1,18 @@
+﻿[
+  {
+    Sql: ALTER TABLE [dbo].[users] ADD CONSTRAINT [uq_users_email] UNIQUE ([email]),
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: ALTER TABLE [dbo].[users] DROP CONSTRAINT [uq_users_email],
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: ALTER TABLE [dbo].[accounts] ADD CONSTRAINT [ck_balance] CHECK (balance >= 0),
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: ALTER TABLE [dbo].[accounts] DROP CONSTRAINT [ck_balance],
+    RunOutsideTransaction: false
+  }
+]

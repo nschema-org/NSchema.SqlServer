@@ -10,7 +10,17 @@ This package uses **lockstep major versioning** with the `NSchema.Core` package:
 
 As a consequence, breaking changes that are specific to this provider (rather than the core API) are signalled by a **minor version bump** rather than a major one, and called out explicitly in this changelog.
 
-## [4.3.0] - 2026-07-09
+## [Unreleased]
+
+Tracks the NSchema.Core 5.0 rearchitecture (requires `NSchema.Core 5.0.0-alpha.1`).
+
+### Changed
+
+- **`SqlServerSqlDialect` replaces the SQL generator.** The provider now plugs into Core's `SqlDialect` seam, rendering one migration action at a time. Features SQL Server cannot express (schema renames, materialized views, exclusion constraints, in-place identity/computed-column changes, `BEFORE`/row-level/`WHEN`/function-style triggers, enums, domains, composite types, extensions) now surface as error diagnostics on the plan instead of throwing `NotSupportedException`.
+- **`SqlServerDatabaseIntrospector` replaces the schema provider.** It implements Core's `IDatabaseIntrospector`, reading the live database into the new `NSchema.Model` schema model scoped by a `PlanningScope`.
+- **`UseSqlServer(...)` replaces `UseSqlServerSchema(...)`, and `UseSqlServerDialect()` replaces `UseSqlServerGenerator()`.** Same overloads and registrations under the new Core seams.
+- **The plugin is configured by a `DATABASE` statement.** `SqlServerPlugin` implements `INSchemaDatabasePlugin`: `Configure` takes the typed plugin configuration and returns a `Result` whose diagnostics carry any configuration errors. The `NSCHEMA_SQLSERVER_*` environment overrides are unchanged.
+- **A paired type + nullability change renders two `ALTER COLUMN` statements.** Each action restates the column's complete final state, so both statements are identical and idempotent; previously the pair was folded into one statement.
 
 ### Added
 

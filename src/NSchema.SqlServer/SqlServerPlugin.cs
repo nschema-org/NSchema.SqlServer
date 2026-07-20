@@ -1,4 +1,3 @@
-using NSchema.Configuration;
 using NSchema.Plugins;
 
 namespace NSchema.SqlServer;
@@ -6,33 +5,34 @@ namespace NSchema.SqlServer;
 /// <summary>
 /// The NSchema plugin manifest for the SQL Server provider.
 /// </summary>
-public sealed class SqlServerPlugin : INSchemaProviderPlugin
+public sealed class SqlServerPlugin : INSchemaDatabasePlugin
 {
+    private const string Source = "sqlserver";
     private const string EnvConnectionString = "NSCHEMA_SQLSERVER_CONNECTION_STRING";
     private const string EnvUsername = "NSCHEMA_SQLSERVER_USERNAME";
     private const string EnvPassword = "NSCHEMA_SQLSERVER_PASSWORD";
 
-    /// <inheritdoc />
-    public string Label => "sqlserver";
-
-    /// <inheritdoc />
-    public string GetScaffoldTemplate(ScaffoldContext context)
+    /// <summary>The options a DATABASE statement binds onto.</summary>
+    private sealed class SqlServerOptions
     {
-        var lines = new List<string> { "PROVIDER sqlserver (" };
-        if (context.Version is { } version)
-        {
-            lines.Add($"  version           = '{version}',");
-        }
-
-        lines.Add($"  -- Prefer the {EnvConnectionString} environment variable, which");
-        lines.Add("  -- overrides the value below.");
-        lines.Add("  connection_string = ''");
-        lines.Add("  -- Credentials may be supplied separately from the connection string (e.g. from");
-        lines.Add($"  -- a secret store) via {EnvUsername} / {EnvPassword}.");
-        lines.Add("  -- They override any user/password embedded in connection_string.");
-        lines.Add(");");
-        return string.Join("\n", lines);
+        public string? ConnectionString { get; set; }
+        public string? Username { get; set; }
+        public string? Password { get; set; }
+        public int? CommandTimeout { get; set; }
     }
+
+    /// <inheritdoc />
+    public string GetScaffoldTemplate(ScaffoldContext context) =>
+        $"""
+        DATABASE sqlserver (
+          -- Prefer the {EnvConnectionString} environment variable, which
+          -- overrides the value below.
+          connection_string = ''
+          -- Credentials may be supplied separately from the connection string (e.g. from
+          -- a secret store) via {EnvUsername} / {EnvPassword}.
+          -- They override any user/password embedded in connection_string.
+        );
+        """;
 
     /// <inheritdoc />
     public string GetSampleSchema() =>
@@ -47,65 +47,34 @@ public sealed class SqlServerPlugin : INSchemaProviderPlugin
         """;
 
     /// <inheritdoc />
-    public PluginConfigureResult Configure(NSchemaApplicationBuilder builder, ConfigBlock block)
+    public Result Configure(NSchemaApplicationBuilder builder, PluginConfig config)
     {
-        var errors = new List<string>();
-        var connectionString = "";
-        string? username = null;
-        string? password = null;
-        int? commandTimeout = null;
+        var bound = config.Bind<SqlServerOptions>();
+        var diagnostics = new List<Diagnostic>(bound.Diagnostics);
+        var options = bound.Value!;
 
-        foreach (var (key, value) in block.Attributes)
-        {
-            switch (key.ToLowerInvariant())
-            {
-                case "connection_string":
-                    connectionString = value.AsString();
-                    break;
-                case "username":
-                    username = value.AsString();
-                    break;
-                case "password":
-                    password = value.AsString();
-                    break;
-                case "command_timeout":
-                    if (value.Kind is ConfigValueKind.Integer)
-                    {
-                        commandTimeout = (int)value.AsInteger();
-                    }
-                    else
-                    {
-                        errors.Add("PROVIDER sqlserver: command_timeout must be an integer.");
-                    }
-
-                    break;
-                default:
-                    errors.Add($"PROVIDER sqlserver: unknown attribute '{key}'.");
-                    break;
-            }
-        }
-
-        // Credentials may be supplied out of band (e.g. a secret store); the environment overrides the block.
-        connectionString = Environment.GetEnvironmentVariable(EnvConnectionString) ?? connectionString;
-        username = Environment.GetEnvironmentVariable(EnvUsername) ?? username;
-        password = Environment.GetEnvironmentVariable(EnvPassword) ?? password;
+        // Credentials may be supplied out of band (e.g. a secret store); the environment overrides the statement.
+        var connectionString = Environment.GetEnvironmentVariable(EnvConnectionString) ?? options.ConnectionString;
+        var username = Environment.GetEnvironmentVariable(EnvUsername) ?? options.Username;
+        var password = Environment.GetEnvironmentVariable(EnvPassword) ?? options.Password;
 
         if (string.IsNullOrEmpty(connectionString))
         {
-            errors.Add($"PROVIDER sqlserver: connection_string is required. Set it via the {EnvConnectionString} environment variable or the block attribute.");
+            diagnostics.Add(Diagnostic.Error(Source,
+                $"The SQL Server provider requires connection_string. Set it via the {EnvConnectionString} environment variable or the DATABASE statement."));
         }
 
-        if (commandTimeout is < 0)
+        if (options.CommandTimeout is < 0)
         {
-            errors.Add("PROVIDER sqlserver: command_timeout must not be negative.");
+            diagnostics.Add(Diagnostic.Error(Source, "command_timeout must not be negative."));
         }
 
-        if (errors.Count > 0)
+        if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
         {
-            return PluginConfigureResult.Failure([.. errors]);
+            return Result.From(diagnostics);
         }
 
-        builder.UseSqlServerSchema(connectionStringBuilder =>
+        builder.UseSqlServer(connectionStringBuilder =>
         {
             // Order matters: assigning ConnectionString re-parses the whole string, so it must precede the discrete overrides.
             connectionStringBuilder.ConnectionString = connectionString;
@@ -119,12 +88,12 @@ public sealed class SqlServerPlugin : INSchemaProviderPlugin
                 connectionStringBuilder.Password = password;
             }
 
-            if (commandTimeout is { } timeout)
+            if (options.CommandTimeout is { } timeout)
             {
                 connectionStringBuilder.CommandTimeout = timeout;
             }
         });
 
-        return PluginConfigureResult.Success;
+        return Result.From(diagnostics);
     }
 }
