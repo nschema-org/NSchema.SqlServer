@@ -2,8 +2,7 @@ using Microsoft.Data.SqlClient;
 using NSchema.Model;
 using NSchema.Operations;
 using NSchema.Plugins;
-using NSchema.Plugins.Model;
-using NSchema.Plugins.Model.Config;
+using NSchema.Configuration.Plugins;
 using NSchema.SqlServer.Sql;
 using NSchema.SqlServer.Tests.Fixtures;
 
@@ -121,9 +120,9 @@ public sealed class SqlServerPluginEndToEndTests(SqlServerContainerFixture fixtu
 
     private PlanningScope Scope() => PlanningScope.To(new SqlIdentifier(_schema));
 
-    private PluginConfig Config() => new(new PluginLabel("sqlserver"), new Dictionary<AttributeKey, ConfigValue>
+    private PluginSettings Config() => new(new PluginLabel("sqlserver"), new Dictionary<string, string?>
     {
-        [new AttributeKey("connection_string")] = ConfigValue.OfString(fixture.ConnectionString),
+        ["connection_string"] = fixture.ConnectionString,
     });
 
     private static async Task Exec(SqlConnection conn, string sql)
