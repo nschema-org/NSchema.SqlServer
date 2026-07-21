@@ -1,6 +1,6 @@
+using NSchema.Configuration.Plugins;
 using NSchema.Plan.Backends;
 using NSchema.Plugins;
-using NSchema.Configuration.Plugins;
 
 namespace NSchema.SqlServer.Tests;
 
