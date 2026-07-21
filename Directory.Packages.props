@@ -7,7 +7,7 @@
     <PackageVersion Include="coverlet.collector" Version="10.0.1" />
     <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.0.2" />
     <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.301" />
-    <PackageVersion Include="NSchema.Core" Version="5.0.0-alpha.2" />
+    <PackageVersion Include="NSchema.Core" Version="5.0.0-alpha.4" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
     <PackageVersion Include="NSubstitute" Version="6.0.0" />
     <PackageVersion Include="Shouldly" Version="4.3.0" />
