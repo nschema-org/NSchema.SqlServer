@@ -1,4 +1,5 @@
 using NSchema.Plugins;
+using NSchema.Plugins.Model.Config;
 
 namespace NSchema.SqlServer;
 

@@ -2,6 +2,8 @@ using Microsoft.Data.SqlClient;
 using NSchema.Model;
 using NSchema.Operations;
 using NSchema.Plugins;
+using NSchema.Plugins.Model;
+using NSchema.Plugins.Model.Config;
 using NSchema.SqlServer.Sql;
 using NSchema.SqlServer.Tests.Fixtures;
 

@@ -1,5 +1,7 @@
 using NSchema.Plan.Backends;
 using NSchema.Plugins;
+using NSchema.Plugins.Model;
+using NSchema.Plugins.Model.Config;
 
 namespace NSchema.SqlServer.Tests;
 
