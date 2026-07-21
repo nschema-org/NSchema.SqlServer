@@ -1,5 +1,5 @@
+using NSchema.Configuration.Plugins;
 using NSchema.Plugins;
-using NSchema.Plugins.Model.Config;
 
 namespace NSchema.SqlServer;
 
@@ -48,11 +48,15 @@ public sealed class SqlServerPlugin : INSchemaDatabasePlugin
         """;
 
     /// <inheritdoc />
-    public Result Configure(NSchemaApplicationBuilder builder, PluginConfig config)
+    public Result Configure(NSchemaApplicationBuilder builder, PluginSettings settings)
     {
-        var bound = config.Bind<SqlServerOptions>();
+        var bound = settings.Get<SqlServerOptions>();
+        if (bound.Value is not { } options)
+        {
+            return Result.From(bound.Diagnostics);
+        }
+
         var diagnostics = new List<Diagnostic>(bound.Diagnostics);
-        var options = bound.Value!;
 
         // Credentials may be supplied out of band (e.g. a secret store); the environment overrides the statement.
         var connectionString = Environment.GetEnvironmentVariable(EnvConnectionString) ?? options.ConnectionString;

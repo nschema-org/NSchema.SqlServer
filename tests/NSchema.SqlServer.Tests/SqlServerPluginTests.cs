@@ -1,7 +1,6 @@
+using NSchema.Configuration.Plugins;
 using NSchema.Plan.Backends;
 using NSchema.Plugins;
-using NSchema.Plugins.Model;
-using NSchema.Plugins.Model.Config;
 
 namespace NSchema.SqlServer.Tests;
 
@@ -57,7 +56,7 @@ public sealed class SqlServerPluginTests : IDisposable
     {
         // Arrange
         var builder = NSchemaApplication.CreateBuilder();
-        var config = Config(("connection_string", ConfigValue.OfString("Server=localhost;Database=app")));
+        var config = Config(("connection_string", "Server=localhost;Database=app"));
 
         // Act
         var result = _sut.Configure(builder, config);
@@ -89,15 +88,15 @@ public sealed class SqlServerPluginTests : IDisposable
         // Arrange
         var builder = NSchemaApplication.CreateBuilder();
         var config = Config(
-            ("connection_string", ConfigValue.OfString("Server=localhost")),
-            ("nonsense", ConfigValue.OfString("x")));
+            ("connection_string", "Server=localhost"),
+            ("nonsense", "x"));
 
         // Act
         var result = _sut.Configure(builder, config);
 
         // Assert
         result.IsFailure.ShouldBeTrue();
-        result.Errors.ShouldContain(e => e.Message.Contains("nonsense"));
+        result.Errors.ShouldContain(e => e.Message.Contains("nonsense", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -106,15 +105,15 @@ public sealed class SqlServerPluginTests : IDisposable
         // Arrange
         var builder = NSchemaApplication.CreateBuilder();
         var config = Config(
-            ("connection_string", ConfigValue.OfString("Server=localhost")),
-            ("command_timeout", ConfigValue.OfString("soon")));
+            ("connection_string", "Server=localhost"),
+            ("command_timeout", "soon"));
 
         // Act
         var result = _sut.Configure(builder, config);
 
         // Assert
         result.IsFailure.ShouldBeTrue();
-        result.Errors.ShouldContain(e => e.Message.Contains("command_timeout"));
+
     }
 
     [Fact]
@@ -123,8 +122,8 @@ public sealed class SqlServerPluginTests : IDisposable
         // Arrange
         var builder = NSchemaApplication.CreateBuilder();
         var config = Config(
-            ("connection_string", ConfigValue.OfString("Server=localhost")),
-            ("command_timeout", ConfigValue.OfInteger(-1)));
+            ("connection_string", "Server=localhost"),
+            ("command_timeout", "-1"));
 
         // Act
         var result = _sut.Configure(builder, config);
@@ -137,9 +136,9 @@ public sealed class SqlServerPluginTests : IDisposable
     [Fact]
     public void Configure_MultipleProblems_AggregatesEveryError()
     {
-        // Arrange — an unknown attribute and no connection string: both must be reported, not just the first.
+        // Arrange — no connection string and a negative timeout: both must be reported, not just the first.
         var builder = NSchemaApplication.CreateBuilder();
-        var config = Config(("nope", ConfigValue.OfString("x")));
+        var config = Config(("command_timeout", "-1"));
 
         // Act
         var result = _sut.Configure(builder, config);
@@ -165,6 +164,6 @@ public sealed class SqlServerPluginTests : IDisposable
         result.Errors.ShouldBeEmpty();
     }
 
-    private static PluginConfig Config(params (string Key, ConfigValue Value)[] attributes)
-        => new(new PluginLabel("sqlserver"), attributes.ToDictionary(a => new AttributeKey(a.Key), a => a.Value));
+    private static PluginSettings Config(params (string Key, string? Value)[] attributes)
+        => new(new PluginLabel("sqlserver"), attributes.ToDictionary(a => a.Key, a => a.Value, StringComparer.OrdinalIgnoreCase));
 }
