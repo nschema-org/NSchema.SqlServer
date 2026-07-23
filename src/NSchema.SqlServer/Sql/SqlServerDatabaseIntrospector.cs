@@ -41,7 +41,10 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
 
     public async ValueTask<Database> GetDatabase(PlanningScope scope, CancellationToken cancellationToken = default)
     {
-        var schemas = scope.IsUnscoped ? null : scope.SchemaNames.Select(s => s.Value).ToArray();
+        // Every address belongs to a schema (a schema address is its own), so the read narrows to those.
+        var schemas = scope.IsUnscoped
+            ? null
+            : scope.Addresses.Select(a => a.SchemaName).OfType<SqlIdentifier>().Distinct().Select(s => s.Value).ToArray();
 
         await using var connection = await source.OpenConnectionAsync(cancellationToken);
 

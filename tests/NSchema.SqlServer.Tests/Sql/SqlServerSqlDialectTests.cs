@@ -447,7 +447,7 @@ public sealed class SqlServerSqlDialectTests(SqlServerContainerFixture fixture) 
 
     private async Task<NSchema.Model.Schemas.Schema> Introspect()
     {
-        var database = await _introspector.GetDatabase(PlanningScope.To(new SqlIdentifier(_schema)), TestContext.Current.CancellationToken);
+        var database = await _introspector.GetDatabase(PlanningScope.To(new SchemaAddress(_schema)), TestContext.Current.CancellationToken);
         return database.Schemas.Single(s => s.Name == _schema);
     }
 
