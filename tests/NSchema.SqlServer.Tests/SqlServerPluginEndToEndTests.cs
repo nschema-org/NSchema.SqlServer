@@ -118,7 +118,7 @@ public sealed class SqlServerPluginEndToEndTests(SqlServerContainerFixture fixtu
         (await Scalar(conn, $"SELECT email FROM [{_schema}].[users] WHERE id = 1")).ShouldBe("alice@example.com");
     }
 
-    private PlanningScope Scope() => PlanningScope.To(new SqlIdentifier(_schema));
+    private PlanningScope Scope() => PlanningScope.To(new SchemaAddress(_schema));
 
     private PluginSettings Config() => new(new PluginLabel("sqlserver"), new Dictionary<string, string?>
     {

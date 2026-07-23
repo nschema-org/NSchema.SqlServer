@@ -1,6 +1,7 @@
 using NSchema.Configuration.Plugins;
 using NSchema.Plan.Backends;
 using NSchema.Plugins;
+using NSchema.Project.Nsql.Syntax.Blocks;
 
 namespace NSchema.SqlServer.Tests;
 
@@ -40,7 +41,13 @@ public sealed class SqlServerPluginTests : IDisposable
 
     [Fact]
     public void GetScaffoldTemplate_ReturnsDatabaseStatement()
-        => _sut.GetScaffoldTemplate(new ScaffoldContext()).ShouldContain("DATABASE sqlserver");
+    {
+        var block = _sut.GetScaffoldTemplate(new ScaffoldContext());
+
+        block.Keyword.ShouldBe(BlockKeyword.Database);
+        block.Label!.Value.ShouldBe("sqlserver");
+        block.Attributes.ShouldContain(a => a.Key == "connection_string");
+    }
 
     [Fact]
     public void GetSampleSchema_ScaffoldsANamedSchema()
