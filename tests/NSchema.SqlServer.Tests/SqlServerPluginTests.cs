@@ -1,7 +1,7 @@
 using NSchema.Configuration.Plugins;
 using NSchema.Plan.Backends;
 using NSchema.Plugins;
-using NSchema.Project.Nsql.Syntax.Blocks;
+using NSchema.Project.Nsql.Syntax.Settings;
 
 namespace NSchema.SqlServer.Tests;
 
@@ -44,9 +44,9 @@ public sealed class SqlServerPluginTests : IDisposable
     {
         var block = _sut.GetScaffoldTemplate(new ScaffoldContext());
 
-        block.Keyword.ShouldBe(BlockKeyword.Database);
+        block.Keyword.ShouldBe(SettingsKeyword.Database);
         block.Label!.Value.ShouldBe("sqlserver");
-        block.Attributes.ShouldContain(a => a.Key == "connection_string");
+        block.Settings.ShouldContain(a => a.Key == "connection_string");
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public sealed class SqlServerPluginTests : IDisposable
 
         // Assert
         result.IsFailure.ShouldBeTrue();
-        result.Errors.ShouldContain(e => e.Message.Contains("requires connection_string"));
+        result.Errors.ShouldContain(e => e.Message.Contains("connection_string is required"));
     }
 
     [Fact]
@@ -156,12 +156,12 @@ public sealed class SqlServerPluginTests : IDisposable
     }
 
     [Fact]
-    public void Configure_EnvironmentConnectionString_SatisfiesOmittedAttribute()
+    public void Configure_SuppliedConnectionString_Succeeds()
     {
-        // Arrange
-        Environment.SetEnvironmentVariable("NSCHEMA_SQLSERVER_CONNECTION_STRING", "Server=env-host;Database=app");
+        // Arrange — the engine applies any NSCHEMA_DATABASE_* override before binding, so by here the
+        // setting is simply present; where it came from is not the plugin's concern.
         var builder = NSchemaApplication.CreateBuilder();
-        var config = Config();
+        var config = Config(("connection_string", "Server=env-host;Database=app"));
 
         // Act
         var result = _sut.Configure(builder, config);
