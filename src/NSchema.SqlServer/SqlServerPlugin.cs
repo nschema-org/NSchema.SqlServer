@@ -1,8 +1,9 @@
+using System.ComponentModel.DataAnnotations;
 using NSchema.Configuration.Plugins;
 using NSchema.Plugins;
 using NSchema.Project.Nsql;
 using NSchema.Project.Nsql.Syntax;
-using NSchema.Project.Nsql.Syntax.Blocks;
+using NSchema.Project.Nsql.Syntax.Settings;
 using NSchema.Project.Nsql.Tokens;
 
 namespace NSchema.SqlServer;
@@ -13,13 +14,11 @@ namespace NSchema.SqlServer;
 public sealed class SqlServerPlugin : INSchemaDatabasePlugin
 {
     private const string Source = "sqlserver";
-    private const string EnvConnectionString = "NSCHEMA_SQLSERVER_CONNECTION_STRING";
-    private const string EnvUsername = "NSCHEMA_SQLSERVER_USERNAME";
-    private const string EnvPassword = "NSCHEMA_SQLSERVER_PASSWORD";
 
     /// <summary>The options a DATABASE statement binds onto.</summary>
     private sealed class SqlServerOptions
     {
+        [Required(ErrorMessage = "DATABASE sqlserver: connection_string is required. Set it in the statement, or supply NSCHEMA_DATABASE_CONNECTION_STRING.")]
         public string? ConnectionString { get; set; }
         public string? Username { get; set; }
         public string? Password { get; set; }
@@ -27,17 +26,17 @@ public sealed class SqlServerPlugin : INSchemaDatabasePlugin
     }
 
     /// <inheritdoc />
-    public BlockStatement GetScaffoldTemplate(ScaffoldContext context) =>
-        new(BlockKeyword.Database, Identifier.Synthetic(Source), new SeparatedSyntaxList<BlockAttribute>(
+    public SettingsStatement GetScaffoldTemplate(ScaffoldContext context) =>
+        new(SettingsKeyword.Database, Identifier.Synthetic(Source), new SeparatedSyntaxList<Setting>(
         [
-            new BlockAttribute("connection_string", string.Empty),
+            new Setting("connection_string", string.Empty),
         ]))
         {
             DocComment = new Token(
                 TokenKind.DocComment,
-                $"Prefer the {EnvConnectionString} environment variable, which overrides the value below.\n" +
+                "Prefer the NSCHEMA_DATABASE_CONNECTION_STRING environment variable, which overrides the value below.\n" +
                 $"Credentials may be supplied separately from the connection string (e.g. from a secret\n" +
-                $"store) via {EnvUsername} / {EnvPassword}. They override any user/password embedded in\n" +
+                "store) via NSCHEMA_DATABASE_USERNAME / NSCHEMA_DATABASE_PASSWORD. They override any user/password\n" +
                 "connection_string.",
                 SourcePosition.None),
         };
@@ -65,16 +64,10 @@ public sealed class SqlServerPlugin : INSchemaDatabasePlugin
 
         var diagnostics = new List<Diagnostic>(bound.Diagnostics);
 
-        // Credentials may be supplied out of band (e.g. a secret store); the environment overrides the statement.
-        var connectionString = Environment.GetEnvironmentVariable(EnvConnectionString) ?? options.ConnectionString;
-        var username = Environment.GetEnvironmentVariable(EnvUsername) ?? options.Username;
-        var password = Environment.GetEnvironmentVariable(EnvPassword) ?? options.Password;
-
-        if (string.IsNullOrEmpty(connectionString))
-        {
-            diagnostics.Add(Diagnostic.Error(Source,
-                $"The SQL Server provider requires connection_string. Set it via the {EnvConnectionString} environment variable or the DATABASE statement."));
-        }
+        // The engine has already applied any NSCHEMA_DATABASE_* override, so the bound values are final.
+        var connectionString = options.ConnectionString;
+        var username = options.Username;
+        var password = options.Password;
 
         if (options.CommandTimeout is < 0)
         {

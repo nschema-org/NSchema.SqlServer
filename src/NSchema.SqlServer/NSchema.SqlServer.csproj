@@ -48,4 +48,8 @@
     <PackageReference Include="NSchema.Core" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Using Include="NSchema.Diagnostics" />
+  </ItemGroup>
+
 </Project>
