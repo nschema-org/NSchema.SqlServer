@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Microsoft.Data.SqlClient;
 using NSchema.Configuration.Plugins;
 using NSchema.Plugins;
 using NSchema.Project.Nsql;
@@ -14,6 +15,7 @@ namespace NSchema.SqlServer;
 public sealed class SqlServerPlugin : INSchemaDatabasePlugin
 {
     private const string Source = "sqlserver";
+    private const string Integrated = "Integrated";
 
     /// <summary>The options a DATABASE statement binds onto.</summary>
     private sealed class SqlServerOptions
@@ -26,10 +28,23 @@ public sealed class SqlServerPlugin : INSchemaDatabasePlugin
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The parts of a connection string, rather than the string itself: they are what an operator knows offhand. The
+    /// password is deliberately absent — it belongs in NSCHEMA_DATABASE_PASSWORD, not in a committed file.
+    /// </remarks>
+    public IReadOnlyList<ScaffoldPrompt> GetScaffoldPrompts(ScaffoldContext context) =>
+    [
+        new() { Key = "server", Label = "Server", Default = "localhost" },
+        new() { Key = "database", Label = "Database", Default = "master" },
+        new() { Key = "authentication", Label = "Authentication", Default = "Integrated", Choices = ["Integrated", "SQL login"] },
+        new() { Key = "username", Label = "Username", Default = "sa" },
+    ];
+
+    /// <inheritdoc />
     public SettingsStatement GetScaffoldTemplate(ScaffoldContext context) =>
         new(SettingsKeyword.Database, Identifier.Synthetic(Source), new SeparatedSyntaxList<Setting>(
         [
-            new Setting("connection_string", string.Empty),
+            new Setting("connection_string", ConnectionString(context)),
         ]))
         {
             DocComment = new Token(
@@ -40,6 +55,30 @@ public sealed class SqlServerPlugin : INSchemaDatabasePlugin
                 "connection_string.",
                 SourcePosition.None),
         };
+
+    // Nothing answered leaves the setting blank, which is the placeholder a user edits by hand.
+    private static string ConnectionString(ScaffoldContext context)
+    {
+        if (context.Answers.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var integrated = context.Answer("authentication", Integrated) == Integrated;
+        var builder = new SqlConnectionStringBuilder
+        {
+            DataSource = context.Answer("server", "localhost"),
+            InitialCatalog = context.Answer("database", "master"),
+            IntegratedSecurity = integrated,
+        };
+
+        if (!integrated)
+        {
+            builder.UserID = context.Answer("username", "sa");
+        }
+
+        return builder.ConnectionString;
+    }
 
     /// <inheritdoc />
     public string GetSampleSchema() =>
