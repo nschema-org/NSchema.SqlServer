@@ -2,10 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using Microsoft.Data.SqlClient;
 using NSchema.Configuration.Plugins;
 using NSchema.Plugins;
-using NSchema.Project.Nsql;
-using NSchema.Project.Nsql.Syntax;
 using NSchema.Project.Nsql.Syntax.Settings;
-using NSchema.Project.Nsql.Tokens;
 
 namespace NSchema.SqlServer;
 
@@ -42,19 +39,13 @@ public sealed class SqlServerPlugin : INSchemaDatabasePlugin
 
     /// <inheritdoc />
     public SettingsStatement GetScaffoldTemplate(ScaffoldContext context) =>
-        new(SettingsKeyword.Database, Identifier.Synthetic(Source), new SeparatedSyntaxList<Setting>(
-        [
-            new Setting("connection_string", ConnectionString(context)),
-        ]))
-        {
-            DocComment = new Token(
-                TokenKind.DocComment,
-                "Prefer the NSCHEMA_DATABASE_CONNECTION_STRING environment variable, which overrides the value below.\n" +
-                $"Credentials may be supplied separately from the connection string (e.g. from a secret\n" +
-                "store) via NSCHEMA_DATABASE_USERNAME / NSCHEMA_DATABASE_PASSWORD. They override any user/password\n" +
-                "connection_string.",
-                SourcePosition.None),
-        };
+        SettingsStatement.Database(Source)
+            .WithSetting("connection_string", ConnectionString(context))
+            .WithDocComment(
+                "Prefer the NSCHEMA_DATABASE_CONNECTION_STRING environment variable, which overrides the value below.\n"
+                + "Credentials may be supplied separately from the connection string (e.g. from a secret\n"
+                + "store) via NSCHEMA_DATABASE_USERNAME / NSCHEMA_DATABASE_PASSWORD. They override any user/password\n"
+                + "connection_string.");
 
     // Nothing answered leaves the setting blank, which is the placeholder a user edits by hand.
     private static string ConnectionString(ScaffoldContext context)
