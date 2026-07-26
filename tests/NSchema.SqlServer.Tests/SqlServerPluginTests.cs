@@ -1,6 +1,7 @@
 using NSchema.Configuration.Plugins;
 using NSchema.Plan.Backends;
 using NSchema.Plugins;
+using NSchema.Project.Nsql;
 using NSchema.Project.Nsql.Syntax.Settings;
 
 namespace NSchema.SqlServer.Tests;
@@ -39,11 +40,16 @@ public sealed class SqlServerPluginTests : IDisposable
         }
     }
 
+    private static SettingsStatement Configured(NsqlDocument document) =>
+        document.Statements.OfType<SettingsStatement>().ShouldHaveSingleItem();
+
     [Fact]
     public void GetScaffoldTemplate_ReturnsDatabaseStatement()
     {
-        var block = _sut.GetScaffoldTemplate(new ScaffoldContext());
+        // Act
+        var block = Configured(_sut.GetScaffoldTemplate(new ScaffoldContext()));
 
+        // Assert
         block.Keyword.ShouldBe(SettingsKeyword.Database);
         block.Label!.Value.ShouldBe("sqlserver");
         block.Settings.ShouldContain(a => a.Key == "connection_string");
@@ -52,8 +58,10 @@ public sealed class SqlServerPluginTests : IDisposable
     [Fact]
     public void GetSampleSchema_ScaffoldsANamedSchema()
     {
-        var schema = _sut.GetSampleSchema();
+        // Act
+        var schema = NsqlWriter.Write(_sut.GetSampleSchema());
 
+        // Assert
         schema.ShouldContain("CREATE SCHEMA app;");
         schema.ShouldContain("CREATE TABLE app.widgets");
     }
