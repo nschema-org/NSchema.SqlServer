@@ -19,10 +19,11 @@ Tracks the NSchema.Core 5.0 rearchitecture (requires `NSchema.Core 5.0.0-alpha.1
 - **`SqlServerSqlDialect` replaces the SQL generator.** The provider now plugs into Core's `SqlDialect` seam, rendering one migration action at a time. Features SQL Server cannot express (schema renames, materialized views, exclusion constraints, in-place identity/computed-column changes, `BEFORE`/row-level/`WHEN`/function-style triggers, enums, domains, composite types, extensions) now surface as error diagnostics on the plan instead of throwing `NotSupportedException`.
 - **`SqlServerDatabaseIntrospector` replaces the schema provider.** It implements Core's `IDatabaseIntrospector`, reading the live database into the new `NSchema.Model` schema model scoped by a `PlanningScope`.
 - **`UseSqlServer(...)` replaces `UseSqlServerSchema(...)`, and `UseSqlServerDialect()` replaces `UseSqlServerGenerator()`.** Same overloads and registrations under the new Core seams.
-- **The plugin is configured by a `DATABASE` statement.** `SqlServerPlugin` implements `INSchemaDatabasePlugin`: `Configure` takes the core's typed `PluginSettings` and returns a `Result` whose diagnostics carry any configuration errors. The `NSCHEMA_SQLSERVER_*` environment overrides are unchanged.
+- **The plugin is configured by a `DATABASE` statement.** `SqlServerPlugin` implements `INSchemaDatabasePlugin`: `Configure` takes the core's typed `PluginSettings` and returns a `Result` whose diagnostics carry any configuration errors. Environment overrides are the engine's `NSCHEMA_DATABASE_<SETTING>` now; the provider reads no environment variables of its own.
 
 ### Added
 
+- **`new` asks for the connection details.** The plugin declares server, database, authentication and username as scaffolding questions and composes the answers into the `connection_string` it writes. The password is deliberately not asked for — it belongs in `NSCHEMA_DATABASE_PASSWORD`.
 - Supports change-event scripts (`SCRIPT '<name>' RUN ON <event> <path>`): the script's SQL is executed verbatim at its planned position in the migration.
 
 ## [4.0.0] - 2026-07-01
