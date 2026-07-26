@@ -1,11 +1,11 @@
 using System.ComponentModel.DataAnnotations;
 using Microsoft.Data.SqlClient;
 using NSchema.Configuration.Plugins;
-using NSchema.Plugins;
 using NSchema.Model;
 using NSchema.Model.Columns;
 using NSchema.Model.Schemas;
 using NSchema.Model.Tables;
+using NSchema.Plugins;
 using NSchema.Project.Nsql;
 using NSchema.Project.Nsql.Syntax.Settings;
 
