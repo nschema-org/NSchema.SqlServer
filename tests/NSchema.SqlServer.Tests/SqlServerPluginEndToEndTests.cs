@@ -62,8 +62,8 @@ public sealed class SqlServerPluginEndToEndTests(SqlServerContainerFixture fixtu
         applyResult.IsSuccess.ShouldBeTrue();
 
         // Assert — the table really exists, read back via a fresh introspection.
-        var live = await new SqlServerDatabaseIntrospector(new SqlServerConnectionSource(fixture.ConnectionString))
-            .GetDatabase(Scope(), TestContext.Current.CancellationToken);
+        var live = (await new SqlServerDatabaseIntrospector(new SqlServerConnectionSource(fixture.ConnectionString))
+            .GetDatabase(Scope(), TestContext.Current.CancellationToken)).Require();
         var table = live.Schemas.ShouldHaveSingleItem().Tables.ShouldHaveSingleItem();
         table.Name.ShouldBe("widgets");
         table.Columns.Select(column => column.Name).ShouldBe([new SqlIdentifier("id"), new SqlIdentifier("name")]);
