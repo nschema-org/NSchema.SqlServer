@@ -1,6 +1,6 @@
 using System.Data.Common;
 using System.Text.RegularExpressions;
-using NSchema.Deployment.Backends;
+using NSchema.Deployment.Plugins;
 using NSchema.Model;
 using NSchema.Model.Columns;
 using NSchema.Model.Constraints;
@@ -39,7 +39,26 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
 
     private const string SchemaScopeFilter = "(@schemas IS NULL OR s.name IN (SELECT value FROM STRING_SPLIT(@schemas, ',')))";
 
-    public async ValueTask<Database> GetDatabase(PlanningScope scope, CancellationToken cancellationToken = default)
+    private const string Source = "sqlserver";
+
+    /// <inheritdoc />
+    public async ValueTask<Result<Database>> GetDatabase(PlanningScope scope, CancellationToken cancellationToken = default)
+    {
+        // A database that cannot be read is an expected outcome for the caller to report. Only DbException is
+        // caught: anything else escaping the read is a defect in this introspector, and the engine treats an
+        // escaping exception as one rather than dressing it up as an environmental problem.
+        try
+        {
+            return await Read(scope, cancellationToken);
+        }
+        catch (DbException exception)
+        {
+            return Result.Failure<Database>(Diagnostic.Error(Source,
+                $"Could not read the live database: {ExceptionMessage.Describe(exception):text}"));
+        }
+    }
+
+    private async ValueTask<Database> Read(PlanningScope scope, CancellationToken cancellationToken)
     {
         // Every address belongs to a schema (a schema address is its own), so the read narrows to those.
         var schemas = scope.IsUnscoped

@@ -43,14 +43,25 @@ public sealed class SqlServerPlugin : INSchemaDatabasePlugin
     ];
 
     /// <inheritdoc />
-    public NsqlDocument GetScaffoldTemplate(ScaffoldContext context) =>
-        new([SettingsStatement.Database(Source)
-            .WithSetting("connection_string", ConnectionString(context))
-            .WithDocComment(
-                "Prefer the NSCHEMA_DATABASE_CONNECTION_STRING environment variable, which overrides the value below.\n"
-                + "Credentials may be supplied separately from the connection string (e.g. from a secret\n"
-                + "store) via NSCHEMA_DATABASE_USERNAME / NSCHEMA_DATABASE_PASSWORD. They override any user/password\n"
-                + "connection_string.")]);
+    public NsqlDocument GetScaffoldTemplate(ScaffoldContext context)
+    {
+        // Nothing about this provider's configuration differs per environment: the connection string comes from
+        // NSCHEMA_DATABASE_CONNECTION_STRING, so an overlay has nothing to say.
+        if (context.EnvironmentName is not null)
+        {
+            return NsqlDocument.Empty;
+        }
+
+        return new NsqlDocument([
+            SettingsStatement.Database(Source)
+                .WithSetting("connection_string", ConnectionString(context))
+                .WithDocComment(
+                    "Prefer the NSCHEMA_DATABASE_CONNECTION_STRING environment variable, which overrides the value below.\n"
+                    + "Credentials may be supplied separately from the connection string (e.g. from a secret\n"
+                    + "store) via NSCHEMA_DATABASE_USERNAME / NSCHEMA_DATABASE_PASSWORD. They override any user/password\n"
+                    + "connection_string."),
+        ]);
+    }
 
     // Nothing answered leaves the setting blank, which is the placeholder a user edits by hand.
     private static string ConnectionString(ScaffoldContext context)
