@@ -131,7 +131,7 @@ public sealed class SqlServerPlugin : INSchemaDatabasePlugin
 
         if (options.CommandTimeout is < 0)
         {
-            diagnostics.Add(Diagnostic.Error(Source, "command_timeout must not be negative."));
+            diagnostics.Add(Diagnostic.Error(Source, "negative-command-timeout", "command_timeout must not be negative."));
         }
 
         if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
