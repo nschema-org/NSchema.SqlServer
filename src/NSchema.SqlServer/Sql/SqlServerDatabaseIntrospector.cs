@@ -53,7 +53,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         }
         catch (DbException exception)
         {
-            return Result.Failure<Database>(Diagnostic.Error(Source,
+            return Result.Failure<Database>(Diagnostic.Error(Source, "database-unreadable",
                 $"Could not read the live database: {ExceptionMessage.Describe(exception):text}"));
         }
     }
@@ -63,7 +63,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         // Every address belongs to a schema (a schema address is its own), so the read narrows to those.
         var schemas = scope.IsUnscoped
             ? null
-            : scope.Addresses.Select(a => a.SchemaName).OfType<SqlIdentifier>().Distinct().Select(s => s.Value).ToArray();
+            : scope.Addresses.Select(SchemaOf).OfType<SqlIdentifier>().Distinct().Select(s => s.Value).ToArray();
 
         await using var connection = await source.OpenConnectionAsync(cancellationToken);
 
@@ -791,4 +791,15 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
 
     [GeneratedRegex(@"^\s*CREATE\s+(OR\s+ALTER\s+)?(FUNCTION|PROCEDURE|PROC)\s+(\[[^\]]*\]|[^\s(]+)(\.(\[[^\]]*\]|[^\s(]+))?", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex RoutineHeader();
+
+    // An address names the schema it sits in: a schema address is its own, an object and a member each carry
+    // theirs, and an extension belongs to the database rather than to any schema.
+    private static SqlIdentifier? SchemaOf(Address address) => address switch
+    {
+        DatabaseAddress { Kind: DatabaseObjectKind.Schema } schema => schema.Name,
+        ObjectAddress @object => @object.Schema,
+        MemberAddress member => member.Schema,
+        _ => null,
+    };
+
 }

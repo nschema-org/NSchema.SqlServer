@@ -49,16 +49,22 @@ internal sealed class SqlServerSqlDialect : SqlDialect
     /// <summary>A bracket-quoted identifier; a literal ']' inside a name is doubled.</summary>
     protected override string Quote(SqlIdentifier identifier) => $"[{identifier.Value.Replace("]", "]]")}]";
 
+    /// <summary>A facet of the declaration that SQL Server has no way to express.</summary>
+    private static Result<IReadOnlyList<SqlStatement>> Unsupported(FormattedText message) => Error("unsupported", message);
+
+    /// <summary>A change SQL Server cannot make in place, so the object has to be rebuilt instead.</summary>
+    private static Result<IReadOnlyList<SqlStatement>> RequiresRecreate(FormattedText message) => Error("requires-recreate", message);
+
     /// <summary>A failed rendering with a SQL Server-specific explanation.</summary>
-    private static Result<IReadOnlyList<SqlStatement>> Error(FormattedText message) =>
-        Result.Failure<IReadOnlyList<SqlStatement>>(Diagnostic.Error(Source, message));
+    private static Result<IReadOnlyList<SqlStatement>> Error(DiagnosticCode code, FormattedText message) =>
+        Result.Failure<IReadOnlyList<SqlStatement>>(Diagnostic.Error(Source, code, message));
 
     // ── Schemas ───────────────────────────────────────────────────────────────
     // CREATE SCHEMA / DROP SCHEMA use the base forms. SQL Server has no schema rename (objects are transferred
     // instead), and no USAGE privilege on a schema (the base already reports grants/revokes as unsupported).
 
     protected override Result<IReadOnlyList<SqlStatement>> RenameSchema(RenameSchema action) =>
-        Error($"SQL Server cannot rename schema {action.OldName}: there is no ALTER SCHEMA … RENAME. Create the new schema and transfer its objects instead.");
+        RequiresRecreate($"SQL Server cannot rename schema {action.OldName}: there is no ALTER SCHEMA … RENAME. Create the new schema and transfer its objects instead.");
 
     protected override Result<IReadOnlyList<SqlStatement>> SetSchemaComment(SetSchemaComment action) =>
         ExtendedProperty(action.OldComment, action.NewComment, ("SCHEMA", action.SchemaName));
@@ -105,10 +111,10 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         Statement($"ALTER TABLE {Qualify(action.Table)} ALTER COLUMN {Quote(action.Column.Name)} {TypeSql(action.Column.Type)}{NullableSql(action.Column.IsNullable)}");
 
     protected override Result<IReadOnlyList<SqlStatement>> AlterIdentitySequence(AlterIdentitySequence action) =>
-        Error($"SQL Server cannot change the seed or increment of identity column {action.Column} in place; this requires rebuilding the table. Recreate the column or table instead.");
+        RequiresRecreate($"SQL Server cannot change the seed or increment of identity column {action.Column} in place; this requires rebuilding the table. Recreate the column or table instead.");
 
     protected override Result<IReadOnlyList<SqlStatement>> SetColumnGenerated(SetColumnGenerated action) =>
-        Error($"SQL Server cannot change the expression of computed column {action.Column} in place; this requires rebuilding the table. Recreate the column or table instead.");
+        RequiresRecreate($"SQL Server cannot change the expression of computed column {action.Column} in place; this requires rebuilding the table. Recreate the column or table instead.");
 
     // A default on SQL Server is a named constraint. Adding is inline (auto-named); dropping needs the name, found
     // via sys.default_constraints since the model tracks defaults by column, not by constraint name.
@@ -151,7 +157,7 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         var idx = action.Index;
         if (idx.Method is not null)
         {
-            return Error($"SQL Server indexes have no access method (USING) — index {idx.Name} specifies {idx.Method}.");
+            return Unsupported($"SQL Server indexes have no access method (USING) — index {idx.Name} specifies {idx.Method}.");
         }
 
         var keys = new List<string>();
@@ -159,12 +165,12 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         {
             if (col.Column is null)
             {
-                return Error($"SQL Server cannot index the expression {col.Expression} directly; add a computed column and index that instead.");
+                return Unsupported($"SQL Server cannot index the expression {col.Expression} directly; add a computed column and index that instead.");
             }
 
             if (col.Nulls != IndexNulls.Default)
             {
-                return Error($"SQL Server indexes do not support NULLS FIRST / NULLS LAST ordering (index {idx.Name}).");
+                return Unsupported($"SQL Server indexes do not support NULLS FIRST / NULLS LAST ordering (index {idx.Name}).");
             }
 
             var sort = col.Sort switch
@@ -198,32 +204,32 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         var trigger = action.Trigger;
         if (trigger.Body is not { } body)
         {
-            return Error($"SQL Server triggers run an inline body, but trigger {trigger.Name} has none (it calls a function). Declare it with an AS $$ … $$ body instead.");
+            return Unsupported($"SQL Server triggers run an inline body, but trigger {trigger.Name} has none (it calls a function). Declare it with an AS $$ … $$ body instead.");
         }
 
         if (trigger.Timing == TriggerTiming.Before)
         {
-            return Error($"SQL Server does not support BEFORE triggers (trigger {trigger.Name}); only AFTER and INSTEAD OF are available.");
+            return Unsupported($"SQL Server does not support BEFORE triggers (trigger {trigger.Name}); only AFTER and INSTEAD OF are available.");
         }
 
         if (trigger.Level == TriggerLevel.Row)
         {
-            return Error($"SQL Server does not support row-level (FOR EACH ROW) triggers (trigger {trigger.Name}); triggers fire once per statement — use the inserted/deleted tables.");
+            return Unsupported($"SQL Server does not support row-level (FOR EACH ROW) triggers (trigger {trigger.Name}); triggers fire once per statement — use the inserted/deleted tables.");
         }
 
         if (trigger.When is not null)
         {
-            return Error($"SQL Server does not support a trigger WHEN condition (trigger {trigger.Name}); put the guard inside the body, e.g. IF UPDATE(column).");
+            return Unsupported($"SQL Server does not support a trigger WHEN condition (trigger {trigger.Name}); put the guard inside the body, e.g. IF UPDATE(column).");
         }
 
         if (trigger.Events.HasFlag(TriggerEvent.Truncate))
         {
-            return Error($"SQL Server does not support TRUNCATE triggers (trigger {trigger.Name}).");
+            return Unsupported($"SQL Server does not support TRUNCATE triggers (trigger {trigger.Name}).");
         }
 
         if (trigger.UpdateOfColumns.Count > 0)
         {
-            return Error($"SQL Server does not support UPDATE OF (columns) on a trigger (trigger {trigger.Name}); use IF UPDATE(column) inside the body.");
+            return Unsupported($"SQL Server does not support UPDATE OF (columns) on a trigger (trigger {trigger.Name}); use IF UPDATE(column) inside the body.");
         }
 
         var timing = trigger.Timing == TriggerTiming.InsteadOf ? "INSTEAD OF" : "AFTER";
@@ -289,7 +295,7 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         var (old, @new) = (action.OldOptions, action.NewOptions);
         if (old.DataType != @new.DataType)
         {
-            return Error($"SQL Server cannot change the data type of sequence {action.Sequence} with ALTER SEQUENCE; drop and recreate the sequence instead.");
+            return RequiresRecreate($"SQL Server cannot change the data type of sequence {action.Sequence} with ALTER SEQUENCE; drop and recreate the sequence instead.");
         }
 
         var parts = new List<string>();
