@@ -452,6 +452,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             .Select(name => new Schema
             {
                 Name = name,
+                IsImplicit = name == SqlServerSchemas.Provided,
                 Comment = schemaComments.GetValueOrDefault((name, name)),
                 Tables = [.. tablesBySchema.GetValueOrDefault(name, [])],
                 Views = [.. viewsBySchema.GetValueOrDefault(name, [])],

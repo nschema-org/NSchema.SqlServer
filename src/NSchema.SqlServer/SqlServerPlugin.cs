@@ -139,6 +139,8 @@ public sealed class SqlServerPlugin : INSchemaDatabasePlugin
             return Result.From(diagnostics);
         }
 
+        builder.AddProjectPolicy<SqlServerProvidedSchemaPolicy>();
+
         builder.UseSqlServer(connectionStringBuilder =>
         {
             // Order matters: assigning ConnectionString re-parses the whole string, so it must precede the discrete overrides.
