@@ -452,7 +452,7 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         "text" => "varchar(max)",
         "date" => "date",
         "time" => "time",
-        "datetime" => "datetime2",
+        "datetime" => "datetime",
         "datetimeoffset" => "datetimeoffset",
         "guid" => "uniqueidentifier",
         "binary" => $"binary({type.Length})",

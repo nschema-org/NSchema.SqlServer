@@ -10,6 +10,13 @@ This package uses **lockstep major versioning** with the `NSchema.Core` package:
 
 As a consequence, breaking changes that are specific to this provider (rather than the core API) are signalled by a **minor version bump** rather than a major one, and called out explicitly in this changelog.
 
+## [5.4.0] - 2026-08-03
+
+### Changed
+
+- **`datetime` and `datetime2` are two types, and both are preserved.** A user who writes `datetime` gets `datetime`; `datetime2` round-trips verbatim. The model's canonical `datetime` no longer silently upgrades to `datetime2`.
+- **System types are captured bare.** A built-in outside the model's vocabulary (`money`, `xml`, both `datetime`s) introspects under its own bare name — the engine's vocabulary is addressed bare — while user-defined types keep their owning schema.
+
 ## [5.3.0] - 2026-08-03
 
 ### Changed

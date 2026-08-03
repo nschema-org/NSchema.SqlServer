@@ -678,8 +678,8 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     // ── Mapping helpers ───────────────────────────────────────────────────────────
 
     /// <summary>
-    /// The canonical model spelling of a catalog type name (<c>uniqueidentifier</c> to <c>guid</c>,
-    /// <c>datetime2</c> to <c>datetime</c>); a name the model has no spelling for is kept verbatim.
+    /// The canonical model spelling of a catalog type name (<c>uniqueidentifier</c> to <c>guid</c>);
+    /// a name the model has no spelling for — including both <c>datetime</c>s — is kept verbatim.
     /// </summary>
     /// <remarks>Mirrors <see cref="MapSqlType"/>, which spells column references the same way.</remarks>
     internal static SqlIdentifier NormalizeNativeTypeName(string typeName) => typeName switch
@@ -688,7 +688,6 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         "real" => "float",
         "float" => "double",
         "numeric" => "decimal",
-        "datetime2" => "datetime",
         "uniqueidentifier" => "guid",
         _ => typeName,
     };
@@ -709,14 +708,14 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         "nvarchar" => maxLength == -1 ? SqlType.NVarChar() : SqlType.NVarChar(maxLength / 2),
         "date" => SqlType.Date,
         "time" => SqlType.Time,
-        "datetime2" => SqlType.DateTime,
         "datetimeoffset" => SqlType.DateTimeOffset,
         "uniqueidentifier" => SqlType.Guid,
         "binary" => SqlType.Binary(maxLength),
         "varbinary" => maxLength == -1 ? SqlType.VarBinary() : SqlType.VarBinary(maxLength),
-        // A user-defined type, or a built-in outside the switch (money, xml, …): captured verbatim,
-        // qualifier included — SqlServerSqlEquivalence decides what a qualifier means.
-        _ => SqlType.Custom(typeSchema, typeName),
+        // A built-in outside the switch (money, xml, datetime, datetime2, …) is captured bare — it is the
+        // engine's own vocabulary, addressed and written bare — while a user-defined type keeps its owning
+        // schema, so a reference resolves to the right object.
+        _ => typeSchema == "sys" ? SqlType.Custom(typeName) : SqlType.Custom(typeSchema, typeName),
     };
 
     private static ReferentialAction MapReferentialAction(int action) => action switch
