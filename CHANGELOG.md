@@ -10,6 +10,12 @@ This package uses **lockstep major versioning** with the `NSchema.Core` package:
 
 As a consequence, breaking changes that are specific to this provider (rather than the core API) are signalled by a **minor version bump** rather than a major one, and called out explicitly in this changelog.
 
+## [5.3.0] - 2026-08-03
+
+### Changed
+
+- **A create is a create.** `CREATE FUNCTION`, `CREATE PROCEDURE`, `CREATE VIEW`, and `CREATE TRIGGER` render without `OR ALTER` when the plan is creating; `CREATE OR ALTER` renders only for the replace and recreate actions, where the plan knows the object exists. (A changed trigger plans as a replacement, rendered `CREATE OR ALTER`.) A create colliding with an object the plan didn't know about now fails loudly instead of silently overwriting it.
+
 ## [5.2.0] - 2026-08-03
 
 ### Added

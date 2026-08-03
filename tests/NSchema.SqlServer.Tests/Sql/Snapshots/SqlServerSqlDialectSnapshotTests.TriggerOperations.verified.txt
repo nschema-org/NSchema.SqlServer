@@ -1,10 +1,14 @@
 ﻿[
   {
-    Sql: CREATE OR ALTER TRIGGER [dbo].[users_audit] ON [dbo].[users] AFTER INSERT, UPDATE AS BEGIN INSERT INTO dbo.audit (msg) VALUES ('changed'); END,
+    Sql: CREATE TRIGGER [dbo].[users_audit] ON [dbo].[users] AFTER INSERT, UPDATE AS BEGIN INSERT INTO dbo.audit (msg) VALUES ('changed'); END,
     RunOutsideTransaction: false
   },
   {
-    Sql: CREATE OR ALTER TRIGGER [dbo].[invoices_guard] ON [dbo].[invoices] INSTEAD OF DELETE AS BEGIN RAISERROR('no deletes', 16, 1); END,
+    Sql: CREATE OR ALTER TRIGGER [dbo].[users_audit] ON [dbo].[users] AFTER INSERT, UPDATE, DELETE AS BEGIN INSERT INTO dbo.audit (msg) VALUES ('changed again'); END,
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: CREATE TRIGGER [dbo].[invoices_guard] ON [dbo].[invoices] INSTEAD OF DELETE AS BEGIN RAISERROR('no deletes', 16, 1); END,
     RunOutsideTransaction: false
   },
   {

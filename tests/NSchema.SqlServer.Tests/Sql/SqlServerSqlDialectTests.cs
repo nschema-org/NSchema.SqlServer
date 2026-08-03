@@ -228,8 +228,8 @@ public sealed class SqlServerSqlDialectTests(SqlServerContainerFixture fixture) 
         await Exec($"CREATE TABLE [{_schema}].[users] (id int, email varchar(50))");
 
         await Apply(new CreateView(_schema, new View { Name = "u", Body = $"SELECT id FROM [{_schema}].[users]" }));
-        // CREATE OR ALTER replaces in place.
-        await Apply(new CreateView(_schema, new View { Name = "u", Body = $"SELECT id, email FROM [{_schema}].[users]" }));
+        // A body change replaces in place; the plan knows the view exists.
+        await Apply(new ReplaceView(_schema, new View { Name = "u", Body = $"SELECT id, email FROM [{_schema}].[users]" }));
 
         var view = (await Introspect()).Views.ShouldHaveSingleItem();
         view.Name.ShouldBe("u");
