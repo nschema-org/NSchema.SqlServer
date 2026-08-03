@@ -45,12 +45,19 @@ public static class NSchemaApplicationBuilderExtensions
         /// <returns>The <see cref="NSchemaApplicationBuilder"/> instance, allowing for method chaining.</returns>
         public NSchemaApplicationBuilder UseSqlServer() => builder
             .UseDatabaseIntrospector<SqlServerDatabaseIntrospector>()
-            .UseSqlServerDialect();
+            .UseSqlServerDialect()
+            .UseSqlServerEquivalence();
 
         /// <summary>
         /// Configures the NSchema application to render SQL for SQL Server.
         /// </summary>
         /// <returns>The <see cref="NSchemaApplicationBuilder"/> instance, allowing for method chaining.</returns>
         public NSchemaApplicationBuilder UseSqlServerDialect() => builder.UseSqlDialect<SqlServerSqlDialect>();
+
+        /// <summary>
+        /// Configures the NSchema application to compare SQL spellings under SQL Server's equivalence rules.
+        /// </summary>
+        /// <returns>The <see cref="NSchemaApplicationBuilder"/> instance, allowing for method chaining.</returns>
+        public NSchemaApplicationBuilder UseSqlServerEquivalence() => builder.UseSqlEquivalence<SqlServerSqlEquivalence>();
     }
 }

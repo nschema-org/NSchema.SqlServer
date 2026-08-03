@@ -10,6 +10,18 @@ This package uses **lockstep major versioning** with the `NSchema.Core` package:
 
 As a consequence, breaking changes that are specific to this provider (rather than the core API) are signalled by a **minor version bump** rather than a major one, and called out explicitly in this changelog.
 
+## [5.2.0] - 2026-08-03
+
+### Added
+
+- **The engine's type vocabulary is captured.** Introspection now records the types SQL Server provides (`sys.types`, table types excluded) as `NativeType`s in the snapshot, spelled in the model's canonical names, alongside user-defined alias and CLR types. With a captured vocabulary, a plan can verify every type the project references and report an unresolvable reference at plan time.
+- **SQL Server equivalence rules.** `UseSqlServer` now registers `SqlServerSqlEquivalence`: a type qualifier naming `dbo` or `sys` folds away when comparing, so `sys.money` and a declared `money` read as one type.
+- **`sys` is reported as a schema SQL Server provides**, alongside `dbo`.
+
+### Fixed
+
+- **User-defined types no longer lose their schema.** A column typed by a UDT outside `dbo` previously introspected as a bare name; it now captures fully qualified, so type references resolve to the right object.
+
 ## [5.1.0] - 2026-08-02
 
 ### Fixed

@@ -10,6 +10,7 @@ using NSchema.Model.Schemas;
 using NSchema.Model.Sequences;
 using NSchema.Model.Tables;
 using NSchema.Model.Triggers;
+using NSchema.Model.Types;
 using NSchema.Model.Views;
 
 namespace NSchema.SqlServer.Sql;
@@ -80,6 +81,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         var routines = await QueryRoutines(connection, schemas, cancellationToken);
         var tableGrants = await QueryTableGrants(connection, schemas, cancellationToken);
         var triggers = await QueryTriggers(connection, schemas, cancellationToken);
+        var nativeTypes = await QueryNativeTypes(connection, schemas, cancellationToken);
 
         var schemaComments = await QueryComments(connection, schemas, SchemaCommentSql, cancellationToken);
         var tableComments = await QueryComments(connection, schemas, ObjectCommentSql("U"), cancellationToken);
@@ -92,7 +94,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         var triggerComments = await QueryNestedComments(connection, schemas, TriggerCommentSql, cancellationToken);
 
         return Build(schemaNamesInDb, tables, columns, primaryKeys, uniqueConstraints, foreignKeys, checkConstraints,
-            indexes, views, sequences, routines, tableGrants, triggers,
+            indexes, views, sequences, routines, tableGrants, triggers, nativeTypes,
             schemaComments, tableComments, viewComments, sequenceComments, routineComments,
             columnComments, indexComments, constraintComments, triggerComments);
     }
@@ -101,7 +103,8 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
 
     private sealed record TableRow(string Schema, string Name);
     private sealed record ColumnRow(string Schema, string Table, string Name, string TypeName, int MaxLength, int Precision, int Scale,
-        bool IsNullable, bool IsIdentity, long? Seed, long? Increment, string? Computed, string? Default);
+        bool IsNullable, bool IsIdentity, long? Seed, long? Increment, string? Computed, string? Default, string TypeSchema);
+    private sealed record NativeTypeRow(string Schema, string Name);
     private sealed record KeyColumnRow(string Schema, string Table, string Constraint, string Column);
     private sealed record ForeignKeyRow(string Schema, string Table, string Constraint, string Column,
         string RefSchema, string RefTable, string RefColumn, int DeleteAction, int UpdateAction);
@@ -158,7 +161,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
                col.max_length, col.precision, col.scale,
                col.is_nullable, col.is_identity,
                CAST(ic.seed_value AS bigint), CAST(ic.increment_value AS bigint),
-               cc.definition, dc.definition
+               cc.definition, dc.definition, SCHEMA_NAME(typ.schema_id)
         FROM sys.columns col
         JOIN sys.tables t ON t.object_id = col.object_id
         JOIN sys.schemas s ON s.schema_id = t.schema_id
@@ -173,7 +176,8 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             r.GetInt16(4), r.GetByte(5), r.GetByte(6),
             r.GetBoolean(7), r.GetBoolean(8),
             r.IsDBNull(9) ? null : r.GetInt64(9), r.IsDBNull(10) ? null : r.GetInt64(10),
-            r.IsDBNull(11) ? null : r.GetString(11), r.IsDBNull(12) ? null : r.GetString(12)), ct);
+            r.IsDBNull(11) ? null : r.GetString(11), r.IsDBNull(12) ? null : r.GetString(12),
+            r.GetString(13)), ct);
 
     private static Task<List<KeyColumnRow>> QueryKeyConstraints(DbConnection c, string[]? schemas, string type, CancellationToken ct) => Query(c, $"""
         SELECT s.name, t.name, kc.name, col.name
@@ -256,6 +260,17 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
           AND {SystemSchemaFilter} AND {SchemaScopeFilter}
         ORDER BY s.name, o.name
         """, schemas, r => new RoutineRow(r.GetString(0), r.GetString(1), r.GetInt32(2) == 1, r.GetString(3)), ct);
+
+    // The engine's type vocabulary: everything a column can be typed with — system types (schema `sys`,
+    // deliberately not filtered out here) and user-defined alias/CLR types, which this provider does not
+    // model as declarations. Table types cannot type a column, so they stay out.
+    private static Task<List<NativeTypeRow>> QueryNativeTypes(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
+        SELECT s.name, typ.name
+        FROM sys.types typ
+        JOIN sys.schemas s ON s.schema_id = typ.schema_id
+        WHERE typ.is_table_type = 0 AND {SchemaScopeFilter}
+        ORDER BY s.name, typ.name
+        """, schemas, r => new NativeTypeRow(r.GetString(0), r.GetString(1)), ct);
 
     private static Task<List<TriggerRow>> QueryTriggers(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
         SELECT s.name, t.name, tr.name, tr.is_instead_of_trigger, m.definition, te.type_desc
@@ -403,6 +418,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         List<RoutineRow> routines,
         List<TableGrantRow> tableGrants,
         List<TriggerRow> triggers,
+        List<NativeTypeRow> nativeTypes,
         Dictionary<(string, string), string> schemaComments,
         Dictionary<(string, string), string> tableComments,
         Dictionary<(string, string), string> viewComments,
@@ -440,11 +456,19 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             .GroupBy(r => r.Schema)
             .ToDictionary(g => g.Key, g => g.Select(r => BuildRoutine(r, routineComments.GetValueOrDefault((r.Schema, r.Name)))).ToList());
 
+        // Names normalize to the model's canonical spellings, the same universe the column mapping produces,
+        // so a reference and its vocabulary entry always compare in one spelling.
+        var nativeTypesBySchema = nativeTypes
+            .Select(t => (t.Schema, Type: new NativeType { Name = NormalizeNativeTypeName(t.Name) }))
+            .GroupBy(x => x.Schema)
+            .ToDictionary(g => g.Key, g => g.Select(x => x.Type).DistinctBy(t => t.Name).ToList());
+
         var allSchemas = schemaNames
             .Union(tablesBySchema.Keys)
             .Union(viewsBySchema.Keys)
             .Union(sequencesBySchema.Keys)
             .Union(routinesBySchema.Keys)
+            .Union(nativeTypesBySchema.Keys)
             .Distinct(StringComparer.Ordinal)
             .OrderBy(n => n, StringComparer.Ordinal);
 
@@ -452,12 +476,14 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             .Select(name => new Schema
             {
                 Name = name,
-                IsImplicit = name == SqlServerSchemas.Provided,
+                // SQL Server provides `dbo` and `sys`: containers, not something a migration creates or drops.
+                IsImplicit = name is SqlServerSchemas.Provided or SqlServerSchemas.System,
                 Comment = schemaComments.GetValueOrDefault((name, name)),
                 Tables = [.. tablesBySchema.GetValueOrDefault(name, [])],
                 Views = [.. viewsBySchema.GetValueOrDefault(name, [])],
                 Sequences = [.. sequencesBySchema.GetValueOrDefault(name, [])],
                 Routines = [.. routinesBySchema.GetValueOrDefault(name, [])],
+                NativeTypes = [.. nativeTypesBySchema.GetValueOrDefault(name, [])],
             })
             .ToList();
 
@@ -487,7 +513,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             .Select(c => new Column
             {
                 Name = c.Name,
-                Type = MapSqlType(c.TypeName, c.MaxLength, c.Precision, c.Scale),
+                Type = MapSqlType(c.TypeName, c.TypeSchema, c.MaxLength, c.Precision, c.Scale),
                 IsNullable = c.IsNullable,
                 IsIdentity = c.IsIdentity,
                 DefaultExpression = c.Computed is null ? StripParens(c.Default) : null,
@@ -651,7 +677,23 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
 
     // ── Mapping helpers ───────────────────────────────────────────────────────────
 
-    private static SqlType MapSqlType(string typeName, int maxLength, int precision, int scale) => typeName switch
+    /// <summary>
+    /// The canonical model spelling of a catalog type name (<c>uniqueidentifier</c> to <c>guid</c>,
+    /// <c>datetime2</c> to <c>datetime</c>); a name the model has no spelling for is kept verbatim.
+    /// </summary>
+    /// <remarks>Mirrors <see cref="MapSqlType"/>, which spells column references the same way.</remarks>
+    internal static SqlIdentifier NormalizeNativeTypeName(string typeName) => typeName switch
+    {
+        "bit" => "boolean",
+        "real" => "float",
+        "float" => "double",
+        "numeric" => "decimal",
+        "datetime2" => "datetime",
+        "uniqueidentifier" => "guid",
+        _ => typeName,
+    };
+
+    private static SqlType MapSqlType(string typeName, string typeSchema, int maxLength, int precision, int scale) => typeName switch
     {
         "bit" => SqlType.Boolean,
         "tinyint" => SqlType.TinyInt,
@@ -672,7 +714,9 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         "uniqueidentifier" => SqlType.Guid,
         "binary" => SqlType.Binary(maxLength),
         "varbinary" => maxLength == -1 ? SqlType.VarBinary() : SqlType.VarBinary(maxLength),
-        _ => SqlType.Custom(typeName),
+        // A user-defined type, or a built-in outside the switch (money, xml, …): captured verbatim,
+        // qualifier included — SqlServerSqlEquivalence decides what a qualifier means.
+        _ => SqlType.Custom(typeSchema, typeName),
     };
 
     private static ReferentialAction MapReferentialAction(int action) => action switch
