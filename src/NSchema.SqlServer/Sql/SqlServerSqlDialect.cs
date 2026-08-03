@@ -196,12 +196,19 @@ internal sealed class SqlServerSqlDialect : SqlDialect
 
     // ── Triggers ──────────────────────────────────────────────────────────────
 
-    // CREATE OR ALTER TRIGGER [s].[name] ON [s].[table] {AFTER|INSTEAD OF} {events} AS <body>. SQL Server triggers
-    // are statement-level, fire only AFTER or INSTEAD OF, carry no WHEN clause and run an inline body — facets of
+    // CREATE [OR ALTER] TRIGGER [s].[name] ON [s].[table] {AFTER|INSTEAD OF} {events} AS <body> — a create is
+    // a plain CREATE (a collision means the database drifted from the plan's belief); a replacement is
+    // CREATE OR ALTER, which the plan emits only when it knows the trigger exists. SQL Server triggers are
+    // statement-level, fire only AFTER or INSTEAD OF, carry no WHEN clause and run an inline body — facets of
     // the model that don't map (BEFORE, row-level, WHEN, TRUNCATE, UPDATE OF, a function indirection) are rejected.
-    protected override Result<IReadOnlyList<SqlStatement>> CreateTrigger(CreateTrigger action)
+    protected override Result<IReadOnlyList<SqlStatement>> CreateTrigger(CreateTrigger action) =>
+        RenderTrigger(action.Table, action.Trigger, orAlter: false);
+
+    protected override Result<IReadOnlyList<SqlStatement>> ReplaceTrigger(ReplaceTrigger action) =>
+        RenderTrigger(action.Table, action.Trigger, orAlter: true);
+
+    private Result<IReadOnlyList<SqlStatement>> RenderTrigger(ObjectAddress table, Trigger trigger, bool orAlter)
     {
-        var trigger = action.Trigger;
         if (trigger.Body is not { } body)
         {
             return Unsupported($"SQL Server triggers run an inline body, but trigger {trigger.Name} has none (it calls a function). Declare it with an AS $$ … $$ body instead.");
@@ -233,7 +240,7 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         }
 
         var timing = trigger.Timing == TriggerTiming.InsteadOf ? "INSTEAD OF" : "AFTER";
-        return Statement($"CREATE OR ALTER TRIGGER {Qualify(action.Table.Schema, trigger.Name)} ON {Qualify(action.Table)} {timing} {TriggerEventsSql(trigger.Events)} AS {body}");
+        return Statement($"CREATE {(orAlter ? "OR ALTER " : "")}TRIGGER {Qualify(table.Schema, trigger.Name)} ON {Qualify(table)} {timing} {TriggerEventsSql(trigger.Events)} AS {body}");
     }
 
     protected override Result<IReadOnlyList<SqlStatement>> DropTrigger(DropTrigger action) =>
@@ -242,9 +249,17 @@ internal sealed class SqlServerSqlDialect : SqlDialect
     protected override Result<IReadOnlyList<SqlStatement>> SetTriggerComment(SetTriggerComment action) =>
         ExtendedProperty(action.OldComment, action.NewComment, ("SCHEMA", action.Trigger.Schema), ("TABLE", action.Trigger.Object), ("TRIGGER", action.Trigger.Member));
 
-    // ── Views (CREATE OR ALTER replaces both an add and a body change in place) ──
+    // ── Views ─────────────────────────────────────────────────────────────────
 
+    // A create is a plain CREATE: if the view already exists, the database has drifted from the plan's
+    // belief, and SQL Server saying so is the correct outcome.
     protected override Result<IReadOnlyList<SqlStatement>> CreateView(CreateView action) =>
+        action.View.IsMaterialized
+            ? Unsupported(action)
+            : Statement($"CREATE VIEW {Qualify(action.SchemaName, action.View.Name)} AS {action.View.Body}");
+
+    // A body change replaces in place; the plan knows the view exists, so OR ALTER is honest here.
+    protected override Result<IReadOnlyList<SqlStatement>> ReplaceView(ReplaceView action) =>
         action.View.IsMaterialized
             ? Unsupported(action)
             : Statement($"CREATE OR ALTER VIEW {Qualify(action.SchemaName, action.View.Name)} AS {action.View.Body}");
@@ -343,7 +358,17 @@ internal sealed class SqlServerSqlDialect : SqlDialect
 
     // ── Routines (CREATE OR ALTER keeps the object identity, so comments survive a recreate) ──
 
-    protected override Result<IReadOnlyList<SqlStatement>> CreateRoutine(CreateRoutine action) =>
+    // A create is a plain CREATE: if the routine already exists, the database has drifted from the plan's
+    // belief, and SQL Server saying so is the correct outcome.
+    protected override Result<IReadOnlyList<SqlStatement>> CreateRoutine(CreateRoutine action)
+    {
+        var routine = action.Routine;
+        return Statement($"CREATE {RoutineKeyword(routine.RoutineKind)} {Qualify(action.SchemaName, routine.Name)}({routine.Arguments}) {routine.Definition}");
+    }
+
+    // Both replace an existing routine in place — a body change, and a signature change (one routine per
+    // name, so a new signature replaces rather than overloading) — which the plan knows exists.
+    protected override Result<IReadOnlyList<SqlStatement>> ReplaceRoutine(ReplaceRoutine action) =>
         CreateOrAlterRoutine(action.SchemaName, action.Routine);
 
     protected override Result<IReadOnlyList<SqlStatement>> RecreateRoutine(RecreateRoutine action) =>

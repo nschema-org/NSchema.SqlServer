@@ -191,6 +191,14 @@ public sealed class SqlServerSqlDialectSnapshotTests
             Events = TriggerEvent.Insert | TriggerEvent.Update,
             Body = "BEGIN INSERT INTO dbo.audit (msg) VALUES ('changed'); END",
         }),
+        // A replacement is in place: CREATE OR ALTER TRIGGER.
+        new ReplaceTrigger(new ObjectAddress("dbo", "users"), new Trigger
+        {
+            Name = "users_audit",
+            Timing = TriggerTiming.After,
+            Events = TriggerEvent.Insert | TriggerEvent.Update | TriggerEvent.Delete,
+            Body = "BEGIN INSERT INTO dbo.audit (msg) VALUES ('changed again'); END",
+        }),
         new CreateTrigger(new ObjectAddress("dbo", "invoices"), new Trigger
         {
             Name = "invoices_guard",
@@ -206,6 +214,7 @@ public sealed class SqlServerSqlDialectSnapshotTests
     [Fact]
     public Task ViewOperations() => VerifyStatements(
         new CreateView("dbo", new View { Name = "active_users", Body = "SELECT id, email FROM dbo.users WHERE active = 1" }),
+        new ReplaceView("dbo", new View { Name = "active_users", Body = "SELECT id, email, created_at FROM dbo.users WHERE active = 1" }),
         new RenameView(new ObjectAddress("dbo", "legacy_active"), "active_users"),
         new DropView(new ObjectAddress("dbo", "active_users")));
 
@@ -235,6 +244,13 @@ public sealed class SqlServerSqlDialectSnapshotTests
             RoutineKind = RoutineKind.Function,
             Arguments = "",
             Definition = "RETURNS int AS BEGIN RETURN (SELECT COUNT(*) FROM dbo.users WHERE active = 1) END",
+        }),
+        new ReplaceRoutine("dbo", new Routine
+        {
+            Name = "active_user_count",
+            RoutineKind = RoutineKind.Function,
+            Arguments = "",
+            Definition = "RETURNS int AS BEGIN RETURN (SELECT COUNT(*) FROM dbo.users WHERE active = 1 AND banned = 0) END",
         }),
         new RenameRoutine(new ObjectAddress("dbo", "user_count"), "active_user_count", RoutineKind.Function),
         new RecreateRoutine("dbo", new Routine

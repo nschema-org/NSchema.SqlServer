@@ -1,6 +1,10 @@
 ﻿[
   {
-    Sql: CREATE OR ALTER VIEW [dbo].[active_users] AS SELECT id, email FROM dbo.users WHERE active = 1,
+    Sql: CREATE VIEW [dbo].[active_users] AS SELECT id, email FROM dbo.users WHERE active = 1,
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: CREATE OR ALTER VIEW [dbo].[active_users] AS SELECT id, email, created_at FROM dbo.users WHERE active = 1,
     RunOutsideTransaction: false
   },
   {

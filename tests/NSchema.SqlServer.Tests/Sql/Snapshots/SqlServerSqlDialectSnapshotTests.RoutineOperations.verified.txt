@@ -1,6 +1,10 @@
 ﻿[
   {
-    Sql: CREATE OR ALTER FUNCTION [dbo].[active_user_count]() RETURNS int AS BEGIN RETURN (SELECT COUNT(*) FROM dbo.users WHERE active = 1) END,
+    Sql: CREATE FUNCTION [dbo].[active_user_count]() RETURNS int AS BEGIN RETURN (SELECT COUNT(*) FROM dbo.users WHERE active = 1) END,
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: CREATE OR ALTER FUNCTION [dbo].[active_user_count]() RETURNS int AS BEGIN RETURN (SELECT COUNT(*) FROM dbo.users WHERE active = 1 AND banned = 0) END,
     RunOutsideTransaction: false
   },
   {
@@ -16,7 +20,7 @@
     RunOutsideTransaction: false
   },
   {
-    Sql: CREATE OR ALTER PROCEDURE [dbo].[archive_users](@cutoff date) AS BEGIN DELETE FROM dbo.users WHERE created_at < @cutoff END,
+    Sql: CREATE PROCEDURE [dbo].[archive_users](@cutoff date) AS BEGIN DELETE FROM dbo.users WHERE created_at < @cutoff END,
     RunOutsideTransaction: false
   },
   {
