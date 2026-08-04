@@ -56,10 +56,10 @@ public sealed class SqlServerDatabaseIntrospectorTests(SqlServerContainerFixture
         names.ShouldContain("guid");     // normalized from uniqueidentifier
         names.ShouldContain("double");   // normalized from float
         names.ShouldContain("decimal");  // normalized from numeric (and decimal itself)
-        names.ShouldContain("datetime"); // normalized from datetime2
+        names.ShouldContain("datetime");  // the legacy type, verbatim
+        names.ShouldContain("datetime2"); // the modern type, verbatim — two real types, never conflated
         names.ShouldContain("money");    // a built-in the model has no spelling for, verbatim
         names.ShouldNotContain("uniqueidentifier"); // the catalog spelling is folded away
-        names.ShouldNotContain("datetime2");
         names.ShouldNotContain("bit");
     }
 
@@ -81,7 +81,7 @@ public sealed class SqlServerDatabaseIntrospectorTests(SqlServerContainerFixture
     }
 
     [Fact]
-    public async Task GetDatabase_BuiltInOutsideTheModel_QualifiesWithSys()
+    public async Task GetDatabase_BuiltInOutsideTheModel_CapturesBare()
     {
         // Arrange
         await Exec($"CREATE TABLE [{_schema}].[fees] (amount MONEY NOT NULL)");
@@ -89,9 +89,10 @@ public sealed class SqlServerDatabaseIntrospectorTests(SqlServerContainerFixture
         // Act
         var model = await Introspect(_schema);
 
-        // Assert — captured verbatim with its real home; the equivalence folds sys away when comparing.
+        // Assert — the engine's own vocabulary is addressed and written bare; only a user-defined type
+        // carries its owning schema.
         model.Schemas.Single(s => s.Name == _schema).Tables.Single(t => t.Name == "fees")
-            .Columns.ShouldHaveSingleItem().Type.ShouldBe(SqlType.Custom("sys", "money"));
+            .Columns.ShouldHaveSingleItem().Type.ShouldBe(SqlType.Custom("money"));
     }
 
     [Fact]

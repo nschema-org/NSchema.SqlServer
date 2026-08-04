@@ -68,7 +68,7 @@
     RunOutsideTransaction: false
   },
   {
-    Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] datetime2 NOT NULL,
+    Sql: ALTER TABLE [dbo].[t] ALTER COLUMN [c] datetime NOT NULL,
     RunOutsideTransaction: false
   },
   {
