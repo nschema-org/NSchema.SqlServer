@@ -12,6 +12,10 @@ As a consequence, breaking changes that are specific to this provider (rather th
 
 ## [5.4.0] - 2026-08-03
 
+### Added
+
+- **Aggregates are a declared limitation.** A project declaring `CREATE AGGREGATE` gets a clear diagnostic — SQL Server aggregates are CLR assemblies the model cannot express — instead of a wrong `CREATE FUNCTION`.
+
 ### Changed
 
 - **`datetime` and `datetime2` are two types, and both are preserved.** A user who writes `datetime` gets `datetime`; `datetime2` round-trips verbatim. The model's canonical `datetime` no longer silently upgrades to `datetime2`.

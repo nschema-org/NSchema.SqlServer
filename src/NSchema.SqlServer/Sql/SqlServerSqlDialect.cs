@@ -363,6 +363,11 @@ internal sealed class SqlServerSqlDialect : SqlDialect
     protected override Result<IReadOnlyList<SqlStatement>> CreateRoutine(CreateRoutine action)
     {
         var routine = action.Routine;
+        if (routine.RoutineKind == RoutineKind.Aggregate)
+        {
+            return AggregatesUnsupported(routine.Name);
+        }
+
         return Statement($"CREATE {RoutineKeyword(routine.RoutineKind)} {Qualify(action.SchemaName, routine.Name)}({routine.Arguments}) {routine.Definition}");
     }
 
@@ -386,7 +391,14 @@ internal sealed class SqlServerSqlDialect : SqlDialect
     // CREATE OR ALTER replaces a function or procedure in place (SQL Server 2016 SP1+), keeping the object identity
     // so that extended-property comments survive — which is why a signature-changing recreate needs no re-comment.
     private Result<IReadOnlyList<SqlStatement>> CreateOrAlterRoutine(SqlIdentifier schemaName, Routine routine) =>
-        Statement($"CREATE OR ALTER {RoutineKeyword(routine.RoutineKind)} {Qualify(schemaName, routine.Name)}({routine.Arguments}) {routine.Definition}");
+        routine.RoutineKind == RoutineKind.Aggregate
+            ? AggregatesUnsupported(routine.Name)
+            : Statement($"CREATE OR ALTER {RoutineKeyword(routine.RoutineKind)} {Qualify(schemaName, routine.Name)}({routine.Arguments}) {routine.Definition}");
+
+    // SQL Server aggregates are CLR assemblies, not SQL declarations; the model's opaque definition cannot
+    // express one, so they are a declared limitation rather than a wrong CREATE FUNCTION.
+    private static Result<IReadOnlyList<SqlStatement>> AggregatesUnsupported(SqlIdentifier name) =>
+        Unsupported($"SQL Server aggregates are CLR-backed; NSchema.SqlServer does not support them (aggregate {name}).");
 
     // ── Building blocks ───────────────────────────────────────────────────────
 
