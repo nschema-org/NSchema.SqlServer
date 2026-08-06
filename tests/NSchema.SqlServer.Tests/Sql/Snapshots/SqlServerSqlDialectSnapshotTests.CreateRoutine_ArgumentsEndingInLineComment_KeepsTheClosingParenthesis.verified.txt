@@ -1,0 +1,8 @@
+﻿[
+  {
+    Sql:
+CREATE PROCEDURE [dbo].[log_error](@id [int] = 0 OUTPUT -- the inserted ID
+) AS BEGIN SET NOCOUNT ON; END;,
+    RunOutsideTransaction: false
+  }
+]

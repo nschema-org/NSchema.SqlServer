@@ -426,7 +426,7 @@ internal sealed class SqlServerSqlDialect : SqlDialect
             return AggregatesUnsupported(routine.Name);
         }
 
-        return Statement($"CREATE {RoutineKeyword(routine.RoutineKind)} {Qualify(action.SchemaName, routine.Name)}({routine.Arguments}) {routine.Definition}");
+        return Statement($"CREATE {RoutineKeyword(routine.RoutineKind)} {Qualify(action.SchemaName, routine.Name)}{ParameterListSql(routine)} {routine.Definition}");
     }
 
     // Both replace an existing routine in place — a body change, and a signature change (one routine per
@@ -451,7 +451,22 @@ internal sealed class SqlServerSqlDialect : SqlDialect
     private Result<IReadOnlyList<SqlStatement>> CreateOrAlterRoutine(SqlIdentifier schemaName, Routine routine) =>
         routine.RoutineKind == RoutineKind.Aggregate
             ? AggregatesUnsupported(routine.Name)
-            : Statement($"CREATE OR ALTER {RoutineKeyword(routine.RoutineKind)} {Qualify(schemaName, routine.Name)}({routine.Arguments}) {routine.Definition}");
+            : Statement($"CREATE OR ALTER {RoutineKeyword(routine.RoutineKind)} {Qualify(schemaName, routine.Name)}{ParameterListSql(routine)} {routine.Definition}");
+
+    // T-SQL rejects empty parentheses on a parameter-less procedure (a function keeps them), and a list
+    // whose final line carries a comment would swallow the closing parenthesis printed after it, so such
+    // a list gains a trailing newline.
+    private static string ParameterListSql(Routine routine)
+    {
+        var text = routine.Arguments.Value;
+        if (routine.RoutineKind == RoutineKind.Procedure && string.IsNullOrWhiteSpace(text))
+        {
+            return "";
+        }
+
+        var guarded = text[(text.LastIndexOf('\n') + 1)..].Contains("--", StringComparison.Ordinal) ? $"{text}\n" : text;
+        return $"({guarded})";
+    }
 
     // SQL Server aggregates are CLR assemblies, not SQL declarations; the model's opaque definition cannot
     // express one, so they are a declared limitation rather than a wrong CREATE FUNCTION.

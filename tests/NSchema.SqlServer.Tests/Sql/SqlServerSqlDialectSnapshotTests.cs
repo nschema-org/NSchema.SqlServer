@@ -236,6 +236,33 @@ public sealed class SqlServerSqlDialectSnapshotTests
             NewOptions: new SequenceOptions(SqlType.Int, IncrementBy: 50)),
         new DropSequence(new ObjectAddress("dbo", "invoice_id")));
 
+    [Fact]
+    public Task CreateRoutine_ParameterlessProcedure_OmitsTheParentheses() => VerifyStatements(
+        new CreateRoutine("dbo", new Routine
+        {
+            Name = "print_error",
+            RoutineKind = RoutineKind.Procedure,
+            Arguments = "",
+            Definition = "AS BEGIN SET NOCOUNT ON; END;",
+        }),
+        new ReplaceRoutine("dbo", new Routine
+        {
+            Name = "print_error",
+            RoutineKind = RoutineKind.Procedure,
+            Arguments = "",
+            Definition = "AS BEGIN SET NOCOUNT OFF; END;",
+        }));
+
+    [Fact]
+    public Task CreateRoutine_ArgumentsEndingInLineComment_KeepsTheClosingParenthesis() => VerifyStatements(
+        new CreateRoutine("dbo", new Routine
+        {
+            Name = "log_error",
+            RoutineKind = RoutineKind.Procedure,
+            Arguments = "@id [int] = 0 OUTPUT -- the inserted ID",
+            Definition = "AS BEGIN SET NOCOUNT ON; END;",
+        }));
+
     // ── Domains (alias types: CREATE TYPE … FROM) ────────────────────────────────
 
     [Fact]

@@ -842,6 +842,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     // and so is a trailing statement terminator — the body is the query, as an author writes it.
     private static string ExtractViewBody(string moduleDefinition)
     {
+        moduleDefinition = SkipLeadingTrivia(moduleDefinition);
         var match = ViewHeader().Match(moduleDefinition);
         return (match.Success ? moduleDefinition[match.Length..] : moduleDefinition).Trim().TrimEnd(';').TrimEnd();
     }
@@ -849,8 +850,47 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     // The body is everything after the first top-level AS that follows the trigger's ON … {AFTER|INSTEAD OF} … header.
     private static string ExtractTriggerBody(string moduleDefinition)
     {
+        moduleDefinition = SkipLeadingTrivia(moduleDefinition);
         var match = TriggerHeader().Match(moduleDefinition);
         return (match.Success ? moduleDefinition[match.Length..] : moduleDefinition).Trim();
+    }
+
+    // sys.sql_modules stores the batch as written, and a batch may open with comments before its CREATE; the
+    // header regexes anchor at the start, so the trivia is stepped over first. It is not kept: an NSQL author's
+    // documentation is a doc comment, which import writes from MS_Description instead.
+    private static string SkipLeadingTrivia(string moduleDefinition)
+    {
+        var i = 0;
+        while (i < moduleDefinition.Length)
+        {
+            var c = moduleDefinition[i];
+            if (char.IsWhiteSpace(c))
+            {
+                i++;
+            }
+            else if (c == '-' && i + 1 < moduleDefinition.Length && moduleDefinition[i + 1] == '-')
+            {
+                while (i < moduleDefinition.Length && moduleDefinition[i] != '\n')
+                {
+                    i++;
+                }
+            }
+            else if (c == '/' && i + 1 < moduleDefinition.Length && moduleDefinition[i + 1] == '*')
+            {
+                var end = moduleDefinition.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                if (end < 0)
+                {
+                    break;
+                }
+                i = end + 2;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        return moduleDefinition[i..];
     }
 
     // Splits a routine module into the parenthesised argument list and the remaining definition. A procedure declared
@@ -858,6 +898,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     // parentheses on the next apply.
     private static (string Arguments, string Definition) SplitRoutineModule(string moduleDefinition)
     {
+        moduleDefinition = SkipLeadingTrivia(moduleDefinition);
         var header = RoutineHeader().Match(moduleDefinition);
         var rest = (header.Success ? moduleDefinition[header.Length..] : moduleDefinition).TrimStart();
 
@@ -878,9 +919,10 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         return asIndex < 0 ? ("", rest.Trim()) : (rest[..asIndex].Trim(), rest[asIndex..].Trim());
     }
 
-    // The AS that ends an unparenthesised procedure header: the first whole-word AS at parenthesis depth zero,
-    // outside strings, bracketed or quoted identifiers, and comments (T-SQL block comments nest) — and not a
-    // parameter's own AS (@name AS type), which directly follows a parameter name.
+    // The word that ends an unparenthesised procedure header: the first whole-word AS — or WITH, opening the
+    // options clause (WITH RECOMPILE, WITH EXECUTE AS …), which stays with the definition — at parenthesis
+    // depth zero, outside strings, bracketed or quoted identifiers, and comments (T-SQL block comments nest).
+    // A parameter's own AS (@name AS type), which directly follows a parameter name, does not end the header.
     private static int FindHeaderAs(string text)
     {
         var depth = 0;
@@ -968,6 +1010,10 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
                             return start;
                         }
                         afterParameterName = false;
+                    }
+                    else if (word.Equals("WITH", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return start;
                     }
                     else
                     {
