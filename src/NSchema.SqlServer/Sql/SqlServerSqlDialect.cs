@@ -4,6 +4,7 @@ using NSchema.Model.Columns;
 using NSchema.Model.Domains;
 using NSchema.Model.Indexes;
 using NSchema.Model.Routines;
+using NSchema.Model.Services;
 using NSchema.Model.Triggers;
 using NSchema.Plan.Domain;
 using NSchema.Plan.Domain.Columns;
@@ -464,7 +465,7 @@ internal sealed class SqlServerSqlDialect : SqlDialect
             return "";
         }
 
-        var guarded = text[(text.LastIndexOf('\n') + 1)..].Contains("--", StringComparison.Ordinal) ? $"{text}\n" : text;
+        var guarded = SqlScanner.EndsInLineComment(text) ? $"{text}\n" : text;
         return $"({guarded})";
     }
 
