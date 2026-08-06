@@ -1,6 +1,7 @@
 using NSchema.Model;
 using NSchema.Model.Columns;
 using NSchema.Model.Constraints;
+using NSchema.Model.Domains;
 using NSchema.Model.Indexes;
 using NSchema.Model.Routines;
 using NSchema.Model.Scripts;
@@ -11,6 +12,7 @@ using NSchema.Model.Views;
 using NSchema.Plan.Domain;
 using NSchema.Plan.Domain.Columns;
 using NSchema.Plan.Domain.Constraints;
+using NSchema.Plan.Domain.Domains;
 using NSchema.Plan.Domain.Indexes;
 using NSchema.Plan.Domain.Routines;
 using NSchema.Plan.Domain.Schemas;
@@ -233,6 +235,27 @@ public sealed class SqlServerSqlDialectSnapshotTests
             OldOptions: new SequenceOptions(SqlType.Int, StartWith: 100, IncrementBy: 5, MinValue: 10, MaxValue: 30000, Cache: 20, Cycle: true),
             NewOptions: new SequenceOptions(SqlType.Int, IncrementBy: 50)),
         new DropSequence(new ObjectAddress("dbo", "invoice_id")));
+
+    // ── Domains (alias types: CREATE TYPE … FROM) ────────────────────────────────
+
+    [Fact]
+    public Task DomainOperations() => VerifyStatements(
+        new CreateDomain("dbo", new DomainType { Name = "OrderNumber", DataType = SqlType.NVarChar(25) }),
+        new CreateDomain("dbo", new DomainType { Name = "Flag", DataType = SqlType.Boolean, NotNull = true }),
+        new RenameDomain(new ObjectAddress("dbo", "Flag"), "YesNo"),
+        new RecreateDomain("dbo", new DomainType { Name = "OrderNumber", DataType = SqlType.NVarChar(50), NotNull = true }),
+        new SetDomainComment(new ObjectAddress("dbo", "Flag"), null, "A yes/no flag."),
+        new DropDomain(new ObjectAddress("dbo", "OrderNumber")));
+
+    [Fact]
+    public void CreateDomain_WithCheckOrDefault_IsUnsupported()
+    {
+        var withCheck = new DomainType { Name = "Email", DataType = SqlType.Text, Checks = [new CheckConstraint { Name = "email_fmt", Expression = "VALUE LIKE '%@%'" }] };
+        var withDefault = new DomainType { Name = "Counter", DataType = SqlType.Int, Default = "0" };
+
+        _sut.Generate(new CreateDomain("dbo", withCheck)).IsFailure.ShouldBeTrue();
+        _sut.Generate(new CreateDomain("dbo", withDefault)).IsFailure.ShouldBeTrue();
+    }
 
     // ── Routines (CREATE OR ALTER; a signature change recreates in place) ────────
 

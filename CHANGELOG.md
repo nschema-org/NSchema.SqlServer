@@ -10,6 +10,22 @@ This package uses **lockstep major versioning** with the `NSchema.Core` package:
 
 As a consequence, breaking changes that are specific to this provider (rather than the core API) are signalled by a **minor version bump** rather than a major one, and called out explicitly in this changelog.
 
+## [5.5.0]
+
+### Added
+
+- **Alias types are domains.** A user-defined alias type (`CREATE TYPE … FROM base`) now introspects as a domain — base type, nullability, and `MS_Description` comment — and the dialect renders domain actions: create, drop, rename (`sp_rename … 'USERDATATYPE'`), recreate, and comment. A domain declaring a default or check constraints remains a clear diagnostic — alias types cannot carry them.
+
+### Changed
+
+- **Alias types left the vocabulary.** They were previously reported as `NativeType`s; a declaration the plan can create and drop is not vocabulary. CLR types remain vocabulary, and table types remain excluded.
+
+### Fixed
+
+- **A view's introspected body is the bare query.** The trailing statement terminator `sys.sql_modules` preserves from the original `CREATE VIEW` is now stripped, so the introspected body matches what an author writes.
+- **Introspected comments are trimmed.** An `MS_Description` value with surrounding whitespace cannot be expressed by an NSQL doc comment, so it could never round-trip; values are trimmed on the way in and whitespace-only values are treated as no comment.
+- **Unparenthesized procedure headers split correctly.** A procedure declared without parentheses had its parameter list found by searching for a space-padded `AS`, which missed a newline-delimited header `AS` and could match one inside the body (a CTE's, an alias's). The header `AS` is now located by a scan that honours strings, bracketed identifiers, comments, parenthesis depth, and a parameter's own `@name AS type`.
+
 ## [5.4.0] - 2026-08-03
 
 ### Added

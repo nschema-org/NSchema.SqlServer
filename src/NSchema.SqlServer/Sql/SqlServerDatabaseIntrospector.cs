@@ -4,6 +4,7 @@ using NSchema.Deployment.Plugins;
 using NSchema.Model;
 using NSchema.Model.Columns;
 using NSchema.Model.Constraints;
+using NSchema.Model.Domains;
 using NSchema.Model.Indexes;
 using NSchema.Model.Routines;
 using NSchema.Model.Schemas;
@@ -82,6 +83,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         var tableGrants = await QueryTableGrants(connection, schemas, cancellationToken);
         var triggers = await QueryTriggers(connection, schemas, cancellationToken);
         var nativeTypes = await QueryNativeTypes(connection, schemas, cancellationToken);
+        var aliasTypes = await QueryAliasTypes(connection, schemas, cancellationToken);
 
         var schemaComments = await QueryComments(connection, schemas, SchemaCommentSql, cancellationToken);
         var tableComments = await QueryComments(connection, schemas, ObjectCommentSql("U"), cancellationToken);
@@ -92,11 +94,12 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         var indexComments = await QueryNestedComments(connection, schemas, IndexCommentSql, cancellationToken);
         var constraintComments = await QueryNestedComments(connection, schemas, ConstraintCommentSql, cancellationToken);
         var triggerComments = await QueryNestedComments(connection, schemas, TriggerCommentSql, cancellationToken);
+        var typeComments = await QueryComments(connection, schemas, TypeCommentSql, cancellationToken);
 
         return Build(schemaNamesInDb, tables, columns, primaryKeys, uniqueConstraints, foreignKeys, checkConstraints,
-            indexes, views, sequences, routines, tableGrants, triggers, nativeTypes,
+            indexes, views, sequences, routines, tableGrants, triggers, nativeTypes, aliasTypes,
             schemaComments, tableComments, viewComments, sequenceComments, routineComments,
-            columnComments, indexComments, constraintComments, triggerComments);
+            columnComments, indexComments, constraintComments, triggerComments, typeComments);
     }
 
     // ── Row DTOs ────────────────────────────────────────────────────────────────
@@ -105,6 +108,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     private sealed record ColumnRow(string Schema, string Table, string Name, string TypeName, int MaxLength, int Precision, int Scale,
         bool IsNullable, bool IsIdentity, long? Seed, long? Increment, string? Computed, string? Default, string TypeSchema);
     private sealed record NativeTypeRow(string Schema, string Name);
+    private sealed record AliasTypeRow(string Schema, string Name, string BaseType, int MaxLength, int Precision, int Scale, bool IsNullable);
     private sealed record KeyColumnRow(string Schema, string Table, string Constraint, string Column);
     private sealed record ForeignKeyRow(string Schema, string Table, string Constraint, string Column,
         string RefSchema, string RefTable, string RefColumn, int DeleteAction, int UpdateAction);
@@ -261,16 +265,30 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         ORDER BY s.name, o.name
         """, schemas, r => new RoutineRow(r.GetString(0), r.GetString(1), r.GetInt32(2) == 1, r.GetString(3)), ct);
 
-    // The engine's type vocabulary: everything a column can be typed with — system types (schema `sys`,
-    // deliberately not filtered out here) and user-defined alias/CLR types, which this provider does not
-    // model as declarations. Table types cannot type a column, so they stay out.
+    // The engine's type vocabulary: everything a column can be typed with that this provider does not model
+    // as a declaration — system types (schema `sys`, deliberately not filtered out here) and CLR types.
+    // Alias types are modeled as domains, and table types cannot type a column, so both stay out.
     private static Task<List<NativeTypeRow>> QueryNativeTypes(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
         SELECT s.name, typ.name
         FROM sys.types typ
         JOIN sys.schemas s ON s.schema_id = typ.schema_id
-        WHERE typ.is_table_type = 0 AND {SchemaScopeFilter}
+        WHERE typ.is_table_type = 0 AND (typ.is_user_defined = 0 OR typ.is_assembly_type = 1)
+          AND {SchemaScopeFilter}
         ORDER BY s.name, typ.name
         """, schemas, r => new NativeTypeRow(r.GetString(0), r.GetString(1)), ct);
+
+    // A user-defined alias type (CREATE TYPE … FROM) is a domain: a named base type with a nullability.
+    private static Task<List<AliasTypeRow>> QueryAliasTypes(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
+        SELECT s.name, typ.name, base.name, typ.max_length, typ.precision, typ.scale, typ.is_nullable
+        FROM sys.types typ
+        JOIN sys.schemas s ON s.schema_id = typ.schema_id
+        JOIN sys.types base ON base.user_type_id = typ.system_type_id
+        WHERE typ.is_user_defined = 1 AND typ.is_table_type = 0 AND typ.is_assembly_type = 0
+          AND {SchemaScopeFilter}
+        ORDER BY s.name, typ.name
+        """, schemas, r => new AliasTypeRow(
+            r.GetString(0), r.GetString(1), r.GetString(2),
+            r.GetInt16(3), r.GetByte(4), r.GetByte(5), r.GetBoolean(6)), ct);
 
     private static Task<List<TriggerRow>> QueryTriggers(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
         SELECT s.name, t.name, tr.name, tr.is_instead_of_trigger, m.definition, te.type_desc
@@ -299,12 +317,17 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
 
     // ── Comments (extended properties) ──────────────────────────────────────────────
 
+    // Comment values are trimmed on the way in: an NSQL doc comment cannot express surrounding whitespace,
+    // so an untrimmed value could never round-trip, and a whitespace-only value is no comment at all.
     private static async Task<Dictionary<(string, string), string>> QueryComments(DbConnection c, string[]? schemas, string sql, CancellationToken ct)
     {
         var result = new Dictionary<(string, string), string>();
         foreach (var (schema, name, comment) in await Query(c, sql, schemas, r => (r.GetString(0), r.GetString(1), r.GetString(2)), ct))
         {
-            result[(schema, name)] = comment;
+            if (comment.Trim() is { Length: > 0 } trimmed)
+            {
+                result[(schema, name)] = trimmed;
+            }
         }
 
         return result;
@@ -315,7 +338,10 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         var result = new Dictionary<(string, string, string), string>();
         foreach (var (schema, parent, child, comment) in await Query(c, sql, schemas, r => (r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3)), ct))
         {
-            result[(schema, parent, child)] = comment;
+            if (comment.Trim() is { Length: > 0 } trimmed)
+            {
+                result[(schema, parent, child)] = trimmed;
+            }
         }
 
         return result;
@@ -344,6 +370,16 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         JOIN sys.objects o ON o.object_id = ep.major_id
         JOIN sys.schemas s ON s.schema_id = o.schema_id
         WHERE ep.class = 1 AND ep.minor_id = 0 AND ep.name = '{DescriptionProperty}' AND o.type IN ('P', 'FN', 'IF', 'TF')
+          AND {SystemSchemaFilter} AND {SchemaScopeFilter}
+        """;
+
+    // class 6 = a type-level property; the major id is the type's user_type_id.
+    private static readonly string TypeCommentSql = $"""
+        SELECT s.name, typ.name, CAST(ep.value AS nvarchar(max))
+        FROM sys.extended_properties ep
+        JOIN sys.types typ ON typ.user_type_id = ep.major_id
+        JOIN sys.schemas s ON s.schema_id = typ.schema_id
+        WHERE ep.class = 6 AND ep.name = '{DescriptionProperty}'
           AND {SystemSchemaFilter} AND {SchemaScopeFilter}
         """;
 
@@ -419,6 +455,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         List<TableGrantRow> tableGrants,
         List<TriggerRow> triggers,
         List<NativeTypeRow> nativeTypes,
+        List<AliasTypeRow> aliasTypes,
         Dictionary<(string, string), string> schemaComments,
         Dictionary<(string, string), string> tableComments,
         Dictionary<(string, string), string> viewComments,
@@ -427,7 +464,8 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         Dictionary<(string, string, string), string> columnComments,
         Dictionary<(string, string, string), string> indexComments,
         Dictionary<(string, string, string), string> constraintComments,
-        Dictionary<(string, string, string), string> triggerComments)
+        Dictionary<(string, string, string), string> triggerComments,
+        Dictionary<(string, string), string> typeComments)
     {
         var tablesBySchema = tables
             .GroupBy(t => t.Schema)
@@ -463,12 +501,23 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             .GroupBy(x => x.Schema)
             .ToDictionary(g => g.Key, g => g.Select(x => x.Type).DistinctBy(t => t.Name).ToList());
 
+        var domainsBySchema = aliasTypes
+            .GroupBy(t => t.Schema)
+            .ToDictionary(g => g.Key, g => g.Select(t => new DomainType
+            {
+                Name = t.Name,
+                DataType = MapSqlType(t.BaseType, "sys", t.MaxLength, t.Precision, t.Scale),
+                NotNull = !t.IsNullable,
+                Comment = typeComments.GetValueOrDefault((t.Schema, t.Name)),
+            }).ToList());
+
         var allSchemas = schemaNames
             .Union(tablesBySchema.Keys)
             .Union(viewsBySchema.Keys)
             .Union(sequencesBySchema.Keys)
             .Union(routinesBySchema.Keys)
             .Union(nativeTypesBySchema.Keys)
+            .Union(domainsBySchema.Keys)
             .Distinct(StringComparer.Ordinal)
             .OrderBy(n => n, StringComparer.Ordinal);
 
@@ -484,6 +533,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
                 Sequences = [.. sequencesBySchema.GetValueOrDefault(name, [])],
                 Routines = [.. routinesBySchema.GetValueOrDefault(name, [])],
                 NativeTypes = [.. nativeTypesBySchema.GetValueOrDefault(name, [])],
+                Domains = [.. domainsBySchema.GetValueOrDefault(name, [])],
             })
             .ToList();
 
@@ -788,11 +838,12 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     }
 
     // sys.sql_modules stores the whole CREATE statement. The body is everything after the first top-level AS that
-    // follows the view name; the leading CREATE [OR ALTER] VIEW <name> header (and any WITH clause) is dropped.
+    // follows the view name; the leading CREATE [OR ALTER] VIEW <name> header (and any WITH clause) is dropped,
+    // and so is a trailing statement terminator — the body is the query, as an author writes it.
     private static string ExtractViewBody(string moduleDefinition)
     {
         var match = ViewHeader().Match(moduleDefinition);
-        return (match.Success ? moduleDefinition[match.Length..] : moduleDefinition).Trim();
+        return (match.Success ? moduleDefinition[match.Length..] : moduleDefinition).Trim().TrimEnd(';').TrimEnd();
     }
 
     // The body is everything after the first top-level AS that follows the trigger's ON … {AFTER|INSTEAD OF} … header.
@@ -803,7 +854,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     }
 
     // Splits a routine module into the parenthesised argument list and the remaining definition. A procedure declared
-    // without parentheses has its arguments taken as the text up to the first AS, which the dialect re-wraps in
+    // without parentheses has its arguments taken as the text up to the header's AS, which the dialect re-wraps in
     // parentheses on the next apply.
     private static (string Arguments, string Definition) SplitRoutineModule(string moduleDefinition)
     {
@@ -823,8 +874,118 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             }
         }
 
-        var asIndex = rest.IndexOf(" AS ", StringComparison.OrdinalIgnoreCase);
-        return asIndex < 0 ? ("", rest.Trim()) : (rest[..asIndex].Trim(), rest[(asIndex + 1)..].Trim());
+        var asIndex = FindHeaderAs(rest);
+        return asIndex < 0 ? ("", rest.Trim()) : (rest[..asIndex].Trim(), rest[asIndex..].Trim());
+    }
+
+    // The AS that ends an unparenthesised procedure header: the first whole-word AS at parenthesis depth zero,
+    // outside strings, bracketed or quoted identifiers, and comments (T-SQL block comments nest) — and not a
+    // parameter's own AS (@name AS type), which directly follows a parameter name.
+    private static int FindHeaderAs(string text)
+    {
+        var depth = 0;
+        var afterParameterName = false;
+        var i = 0;
+        while (i < text.Length)
+        {
+            var c = text[i];
+            if (c == '-' && i + 1 < text.Length && text[i + 1] == '-')
+            {
+                while (i < text.Length && text[i] != '\n')
+                {
+                    i++;
+                }
+            }
+            else if (c == '/' && i + 1 < text.Length && text[i + 1] == '*')
+            {
+                var nesting = 1;
+                i += 2;
+                while (i < text.Length && nesting > 0)
+                {
+                    if (text[i] == '/' && i + 1 < text.Length && text[i + 1] == '*')
+                    {
+                        nesting++;
+                        i += 2;
+                    }
+                    else if (text[i] == '*' && i + 1 < text.Length && text[i + 1] == '/')
+                    {
+                        nesting--;
+                        i += 2;
+                    }
+                    else
+                    {
+                        i++;
+                    }
+                }
+            }
+            else if (c is '\'' or '"' or '[')
+            {
+                afterParameterName = false;
+                var close = c == '[' ? ']' : c;
+                i++;
+                while (i < text.Length)
+                {
+                    if (text[i] == close)
+                    {
+                        // A doubled closer is an escape, not the end.
+                        if (i + 1 < text.Length && text[i + 1] == close)
+                        {
+                            i += 2;
+                            continue;
+                        }
+                        i++;
+                        break;
+                    }
+                    i++;
+                }
+            }
+            else if (c == '(')
+            {
+                afterParameterName = false;
+                depth++;
+                i++;
+            }
+            else if (c == ')')
+            {
+                afterParameterName = false;
+                depth--;
+                i++;
+            }
+            else if (char.IsLetter(c) || c is '_' or '@' or '#')
+            {
+                var start = i;
+                while (i < text.Length && (char.IsLetterOrDigit(text[i]) || text[i] is '_' or '@' or '#' or '$'))
+                {
+                    i++;
+                }
+                if (depth == 0)
+                {
+                    var word = text.AsSpan(start..i);
+                    if (word.Equals("AS", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (!afterParameterName)
+                        {
+                            return start;
+                        }
+                        afterParameterName = false;
+                    }
+                    else
+                    {
+                        afterParameterName = c == '@';
+                    }
+                }
+            }
+            else
+            {
+                if (!char.IsWhiteSpace(c))
+                {
+                    afterParameterName = false;
+                }
+                i++;
+            }
+        }
+
+        return -1;
     }
 
     [GeneratedRegex(@"^\s*CREATE\s+(OR\s+ALTER\s+)?VIEW\s+.+?\s+AS\s+", RegexOptions.IgnoreCase | RegexOptions.Singleline)]

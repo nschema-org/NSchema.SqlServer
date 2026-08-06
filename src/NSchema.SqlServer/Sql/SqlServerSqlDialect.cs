@@ -1,12 +1,14 @@
 using System.Text;
 using NSchema.Model;
 using NSchema.Model.Columns;
+using NSchema.Model.Domains;
 using NSchema.Model.Indexes;
 using NSchema.Model.Routines;
 using NSchema.Model.Triggers;
 using NSchema.Plan.Domain;
 using NSchema.Plan.Domain.Columns;
 using NSchema.Plan.Domain.Constraints;
+using NSchema.Plan.Domain.Domains;
 using NSchema.Plan.Domain.Indexes;
 using NSchema.Plan.Domain.Routines;
 using NSchema.Plan.Domain.Schemas;
@@ -273,6 +275,62 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         action.IsMaterialized
             ? Unsupported(action)
             : ExtendedProperty(action.OldComment, action.NewComment, ("SCHEMA", action.View.Schema), ("VIEW", action.View.Name));
+
+    // ── Domains (alias types: CREATE TYPE … FROM) ─────────────────────────────
+    // An alias type carries a base type and nullability, and nothing else: defaults and check constraints
+    // have no SQL Server equivalent, and there is no ALTER TYPE — a change is a drop and recreate.
+
+    protected override Result<IReadOnlyList<SqlStatement>> CreateDomain(CreateDomain action)
+    {
+        if (DomainGuard(action.DomainType) is { } blocked)
+        {
+            return blocked;
+        }
+
+        return Statement(CreateAliasType(action.SchemaName, action.DomainType));
+    }
+
+    protected override Result<IReadOnlyList<SqlStatement>> DropDomain(DropDomain action) =>
+        Statement($"DROP TYPE {Qualify(action.Domain)}");
+
+    protected override Result<IReadOnlyList<SqlStatement>> RenameDomain(RenameDomain action) =>
+        Statement($"EXEC sys.sp_rename @objname = N'{Lit(Qualify(action.Domain))}', @newname = N'{Lit(action.NewName.Value)}', @objtype = N'USERDATATYPE'");
+
+    protected override Result<IReadOnlyList<SqlStatement>> RecreateDomain(RecreateDomain action)
+    {
+        if (DomainGuard(action.DomainType) is { } blocked)
+        {
+            return blocked;
+        }
+
+        // Valid only while nothing binds the type; SQL Server refuses to drop a type a column still uses,
+        // which is the correct failure for a plan that did not rebuild the dependents first.
+        return Statements(
+            new SqlStatement($"DROP TYPE {Qualify(action.SchemaName, action.DomainType.Name)}"),
+            new SqlStatement(CreateAliasType(action.SchemaName, action.DomainType)));
+    }
+
+    protected override Result<IReadOnlyList<SqlStatement>> AlterDomainNotNull(AlterDomainNotNull action) =>
+        RequiresRecreate($"SQL Server cannot alter an alias type's nullability in place (type {action.Domain}); drop and recreate it.");
+
+    protected override Result<IReadOnlyList<SqlStatement>> AlterDomainDefault(AlterDomainDefault action) =>
+        Unsupported($"SQL Server alias types cannot carry a default (type {action.Domain}); declare the default on the columns that use the type.");
+
+    protected override Result<IReadOnlyList<SqlStatement>> AddDomainCheck(AddDomainCheck action) =>
+        Unsupported($"SQL Server alias types cannot carry check constraints (type {action.Domain}); declare the check on the tables that use the type.");
+
+    protected override Result<IReadOnlyList<SqlStatement>> SetDomainComment(SetDomainComment action) =>
+        ExtendedProperty(action.OldComment, action.NewComment, ("SCHEMA", action.Domain.Schema), ("TYPE", action.Domain.Name));
+
+    private string CreateAliasType(SqlIdentifier schemaName, DomainType domain) =>
+        $"CREATE TYPE {Qualify(schemaName, domain.Name)} FROM {TypeSql(domain.DataType)}{(domain.NotNull ? " NOT NULL" : "")}";
+
+    private static Result<IReadOnlyList<SqlStatement>>? DomainGuard(DomainType domain) => domain switch
+    {
+        { Default: not null } => Unsupported($"SQL Server alias types cannot carry a default (domain {domain.Name}); declare the default on the columns that use the type."),
+        { Checks.Count: > 0 } => Unsupported($"SQL Server alias types cannot carry check constraints (domain {domain.Name}); declare the checks on the tables that use the type."),
+        _ => null,
+    };
 
     // ── Sequences ─────────────────────────────────────────────────────────────
 
