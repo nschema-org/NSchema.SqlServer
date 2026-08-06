@@ -299,12 +299,17 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
 
     // ── Comments (extended properties) ──────────────────────────────────────────────
 
+    // Comment values are trimmed on the way in: an NSQL doc comment cannot express surrounding whitespace,
+    // so an untrimmed value could never round-trip, and a whitespace-only value is no comment at all.
     private static async Task<Dictionary<(string, string), string>> QueryComments(DbConnection c, string[]? schemas, string sql, CancellationToken ct)
     {
         var result = new Dictionary<(string, string), string>();
         foreach (var (schema, name, comment) in await Query(c, sql, schemas, r => (r.GetString(0), r.GetString(1), r.GetString(2)), ct))
         {
-            result[(schema, name)] = comment;
+            if (comment.Trim() is { Length: > 0 } trimmed)
+            {
+                result[(schema, name)] = trimmed;
+            }
         }
 
         return result;
@@ -315,7 +320,10 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         var result = new Dictionary<(string, string, string), string>();
         foreach (var (schema, parent, child, comment) in await Query(c, sql, schemas, r => (r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3)), ct))
         {
-            result[(schema, parent, child)] = comment;
+            if (comment.Trim() is { Length: > 0 } trimmed)
+            {
+                result[(schema, parent, child)] = trimmed;
+            }
         }
 
         return result;
@@ -788,11 +796,12 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     }
 
     // sys.sql_modules stores the whole CREATE statement. The body is everything after the first top-level AS that
-    // follows the view name; the leading CREATE [OR ALTER] VIEW <name> header (and any WITH clause) is dropped.
+    // follows the view name; the leading CREATE [OR ALTER] VIEW <name> header (and any WITH clause) is dropped,
+    // and so is a trailing statement terminator — the body is the query, as an author writes it.
     private static string ExtractViewBody(string moduleDefinition)
     {
         var match = ViewHeader().Match(moduleDefinition);
-        return (match.Success ? moduleDefinition[match.Length..] : moduleDefinition).Trim();
+        return (match.Success ? moduleDefinition[match.Length..] : moduleDefinition).Trim().TrimEnd(';').TrimEnd();
     }
 
     // The body is everything after the first top-level AS that follows the trigger's ON … {AFTER|INSTEAD OF} … header.
@@ -803,7 +812,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     }
 
     // Splits a routine module into the parenthesised argument list and the remaining definition. A procedure declared
-    // without parentheses has its arguments taken as the text up to the first AS, which the dialect re-wraps in
+    // without parentheses has its arguments taken as the text up to the header's AS, which the dialect re-wraps in
     // parentheses on the next apply.
     private static (string Arguments, string Definition) SplitRoutineModule(string moduleDefinition)
     {
@@ -823,8 +832,118 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             }
         }
 
-        var asIndex = rest.IndexOf(" AS ", StringComparison.OrdinalIgnoreCase);
-        return asIndex < 0 ? ("", rest.Trim()) : (rest[..asIndex].Trim(), rest[(asIndex + 1)..].Trim());
+        var asIndex = FindHeaderAs(rest);
+        return asIndex < 0 ? ("", rest.Trim()) : (rest[..asIndex].Trim(), rest[asIndex..].Trim());
+    }
+
+    // The AS that ends an unparenthesised procedure header: the first whole-word AS at parenthesis depth zero,
+    // outside strings, bracketed or quoted identifiers, and comments (T-SQL block comments nest) — and not a
+    // parameter's own AS (@name AS type), which directly follows a parameter name.
+    private static int FindHeaderAs(string text)
+    {
+        var depth = 0;
+        var afterParameterName = false;
+        var i = 0;
+        while (i < text.Length)
+        {
+            var c = text[i];
+            if (c == '-' && i + 1 < text.Length && text[i + 1] == '-')
+            {
+                while (i < text.Length && text[i] != '\n')
+                {
+                    i++;
+                }
+            }
+            else if (c == '/' && i + 1 < text.Length && text[i + 1] == '*')
+            {
+                var nesting = 1;
+                i += 2;
+                while (i < text.Length && nesting > 0)
+                {
+                    if (text[i] == '/' && i + 1 < text.Length && text[i + 1] == '*')
+                    {
+                        nesting++;
+                        i += 2;
+                    }
+                    else if (text[i] == '*' && i + 1 < text.Length && text[i + 1] == '/')
+                    {
+                        nesting--;
+                        i += 2;
+                    }
+                    else
+                    {
+                        i++;
+                    }
+                }
+            }
+            else if (c is '\'' or '"' or '[')
+            {
+                afterParameterName = false;
+                var close = c == '[' ? ']' : c;
+                i++;
+                while (i < text.Length)
+                {
+                    if (text[i] == close)
+                    {
+                        // A doubled closer is an escape, not the end.
+                        if (i + 1 < text.Length && text[i + 1] == close)
+                        {
+                            i += 2;
+                            continue;
+                        }
+                        i++;
+                        break;
+                    }
+                    i++;
+                }
+            }
+            else if (c == '(')
+            {
+                afterParameterName = false;
+                depth++;
+                i++;
+            }
+            else if (c == ')')
+            {
+                afterParameterName = false;
+                depth--;
+                i++;
+            }
+            else if (char.IsLetter(c) || c is '_' or '@' or '#')
+            {
+                var start = i;
+                while (i < text.Length && (char.IsLetterOrDigit(text[i]) || text[i] is '_' or '@' or '#' or '$'))
+                {
+                    i++;
+                }
+                if (depth == 0)
+                {
+                    var word = text.AsSpan(start..i);
+                    if (word.Equals("AS", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (!afterParameterName)
+                        {
+                            return start;
+                        }
+                        afterParameterName = false;
+                    }
+                    else
+                    {
+                        afterParameterName = c == '@';
+                    }
+                }
+            }
+            else
+            {
+                if (!char.IsWhiteSpace(c))
+                {
+                    afterParameterName = false;
+                }
+                i++;
+            }
+        }
+
+        return -1;
     }
 
     [GeneratedRegex(@"^\s*CREATE\s+(OR\s+ALTER\s+)?VIEW\s+.+?\s+AS\s+", RegexOptions.IgnoreCase | RegexOptions.Singleline)]

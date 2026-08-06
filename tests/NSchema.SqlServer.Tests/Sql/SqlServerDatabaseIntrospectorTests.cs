@@ -117,4 +117,67 @@ public sealed class SqlServerDatabaseIntrospectorTests(SqlServerContainerFixture
         // Assert — the vocabulary is filtered like everything else.
         model.Schemas.ShouldNotContain(s => s.Name == "sys");
     }
+
+    // ── Routines ──────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetDatabase_UnparenthesisedProcedure_SplitsArgumentsAtTheHeaderAs()
+    {
+        // Arrange — T-SQL style: no parentheses, newline-delimited AS, a parameter comment, and a body whose
+        // own AS keywords (CTE, aliases) must not end the header early.
+        await Exec($"""
+            CREATE PROCEDURE [{_schema}].[bom]
+                @StartID [int], -- the root assembly
+                @Depth [int]
+            AS
+            BEGIN
+                SET NOCOUNT ON;
+                WITH [cte]([id]) -- CTE name and columns
+                AS (
+                    SELECT [object_id] AS [id] FROM [sys].[objects]
+                )
+                SELECT [id] FROM [cte]
+            END;
+            """);
+
+        // Act
+        var model = await Introspect(_schema);
+
+        // Assert
+        var routine = model.Schemas.Single(s => s.Name == _schema).Routines.ShouldHaveSingleItem();
+        routine.Arguments.Value.ShouldBe("@StartID [int], -- the root assembly\n    @Depth [int]");
+        routine.Definition.Value.ShouldStartWith("AS");
+        routine.Definition.Value.ShouldContain("SET NOCOUNT ON;");
+    }
+
+    [Fact]
+    public async Task GetDatabase_CommentWithTrailingWhitespace_IsTrimmed()
+    {
+        // Arrange — an NSQL doc comment cannot express surrounding whitespace, so it must not survive introspection.
+        await Exec($"CREATE TABLE [{_schema}].[t] (id int)");
+        await Exec($"EXECUTE sys.sp_addextendedproperty N'MS_Description', N'Padded description. ', N'SCHEMA', [{_schema}], N'TABLE', [t]");
+
+        // Act
+        var model = await Introspect(_schema);
+
+        // Assert
+        model.Schemas.Single(s => s.Name == _schema)
+            .Tables.ShouldHaveSingleItem().Comment.ShouldBe("Padded description.");
+    }
+
+    // ── Views ─────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetDatabase_ViewWithTrailingSemicolon_BodyIsTheBareQuery()
+    {
+        // Arrange — sys.sql_modules stores the CREATE statement as written, terminator included.
+        await Exec($"CREATE VIEW [{_schema}].[ones] AS SELECT 1 AS one;");
+
+        // Act
+        var model = await Introspect(_schema);
+
+        // Assert
+        model.Schemas.Single(s => s.Name == _schema)
+            .Views.ShouldHaveSingleItem().Body.Value.ShouldBe("SELECT 1 AS one");
+    }
 }
