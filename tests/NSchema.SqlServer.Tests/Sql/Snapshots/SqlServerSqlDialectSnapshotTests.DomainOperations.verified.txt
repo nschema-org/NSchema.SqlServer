@@ -1,0 +1,30 @@
+﻿[
+  {
+    Sql: CREATE TYPE [dbo].[OrderNumber] FROM nvarchar(25),
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: CREATE TYPE [dbo].[Flag] FROM bit NOT NULL,
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: EXEC sys.sp_rename @objname = N'[dbo].[Flag]', @newname = N'YesNo', @objtype = N'USERDATATYPE',
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: DROP TYPE [dbo].[OrderNumber],
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: CREATE TYPE [dbo].[OrderNumber] FROM nvarchar(50) NOT NULL,
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'A yes/no flag.', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TYPE', @level1name = N'Flag',
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: DROP TYPE [dbo].[OrderNumber],
+    RunOutsideTransaction: false
+  }
+]

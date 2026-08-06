@@ -4,6 +4,7 @@ using NSchema.Deployment.Plugins;
 using NSchema.Model;
 using NSchema.Model.Columns;
 using NSchema.Model.Constraints;
+using NSchema.Model.Domains;
 using NSchema.Model.Indexes;
 using NSchema.Model.Routines;
 using NSchema.Model.Schemas;
@@ -82,6 +83,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         var tableGrants = await QueryTableGrants(connection, schemas, cancellationToken);
         var triggers = await QueryTriggers(connection, schemas, cancellationToken);
         var nativeTypes = await QueryNativeTypes(connection, schemas, cancellationToken);
+        var aliasTypes = await QueryAliasTypes(connection, schemas, cancellationToken);
 
         var schemaComments = await QueryComments(connection, schemas, SchemaCommentSql, cancellationToken);
         var tableComments = await QueryComments(connection, schemas, ObjectCommentSql("U"), cancellationToken);
@@ -92,11 +94,12 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         var indexComments = await QueryNestedComments(connection, schemas, IndexCommentSql, cancellationToken);
         var constraintComments = await QueryNestedComments(connection, schemas, ConstraintCommentSql, cancellationToken);
         var triggerComments = await QueryNestedComments(connection, schemas, TriggerCommentSql, cancellationToken);
+        var typeComments = await QueryComments(connection, schemas, TypeCommentSql, cancellationToken);
 
         return Build(schemaNamesInDb, tables, columns, primaryKeys, uniqueConstraints, foreignKeys, checkConstraints,
-            indexes, views, sequences, routines, tableGrants, triggers, nativeTypes,
+            indexes, views, sequences, routines, tableGrants, triggers, nativeTypes, aliasTypes,
             schemaComments, tableComments, viewComments, sequenceComments, routineComments,
-            columnComments, indexComments, constraintComments, triggerComments);
+            columnComments, indexComments, constraintComments, triggerComments, typeComments);
     }
 
     // ── Row DTOs ────────────────────────────────────────────────────────────────
@@ -105,6 +108,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     private sealed record ColumnRow(string Schema, string Table, string Name, string TypeName, int MaxLength, int Precision, int Scale,
         bool IsNullable, bool IsIdentity, long? Seed, long? Increment, string? Computed, string? Default, string TypeSchema);
     private sealed record NativeTypeRow(string Schema, string Name);
+    private sealed record AliasTypeRow(string Schema, string Name, string BaseType, int MaxLength, int Precision, int Scale, bool IsNullable);
     private sealed record KeyColumnRow(string Schema, string Table, string Constraint, string Column);
     private sealed record ForeignKeyRow(string Schema, string Table, string Constraint, string Column,
         string RefSchema, string RefTable, string RefColumn, int DeleteAction, int UpdateAction);
@@ -261,16 +265,30 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         ORDER BY s.name, o.name
         """, schemas, r => new RoutineRow(r.GetString(0), r.GetString(1), r.GetInt32(2) == 1, r.GetString(3)), ct);
 
-    // The engine's type vocabulary: everything a column can be typed with — system types (schema `sys`,
-    // deliberately not filtered out here) and user-defined alias/CLR types, which this provider does not
-    // model as declarations. Table types cannot type a column, so they stay out.
+    // The engine's type vocabulary: everything a column can be typed with that this provider does not model
+    // as a declaration — system types (schema `sys`, deliberately not filtered out here) and CLR types.
+    // Alias types are modeled as domains, and table types cannot type a column, so both stay out.
     private static Task<List<NativeTypeRow>> QueryNativeTypes(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
         SELECT s.name, typ.name
         FROM sys.types typ
         JOIN sys.schemas s ON s.schema_id = typ.schema_id
-        WHERE typ.is_table_type = 0 AND {SchemaScopeFilter}
+        WHERE typ.is_table_type = 0 AND (typ.is_user_defined = 0 OR typ.is_assembly_type = 1)
+          AND {SchemaScopeFilter}
         ORDER BY s.name, typ.name
         """, schemas, r => new NativeTypeRow(r.GetString(0), r.GetString(1)), ct);
+
+    // A user-defined alias type (CREATE TYPE … FROM) is a domain: a named base type with a nullability.
+    private static Task<List<AliasTypeRow>> QueryAliasTypes(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
+        SELECT s.name, typ.name, base.name, typ.max_length, typ.precision, typ.scale, typ.is_nullable
+        FROM sys.types typ
+        JOIN sys.schemas s ON s.schema_id = typ.schema_id
+        JOIN sys.types base ON base.user_type_id = typ.system_type_id
+        WHERE typ.is_user_defined = 1 AND typ.is_table_type = 0 AND typ.is_assembly_type = 0
+          AND {SchemaScopeFilter}
+        ORDER BY s.name, typ.name
+        """, schemas, r => new AliasTypeRow(
+            r.GetString(0), r.GetString(1), r.GetString(2),
+            r.GetInt16(3), r.GetByte(4), r.GetByte(5), r.GetBoolean(6)), ct);
 
     private static Task<List<TriggerRow>> QueryTriggers(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
         SELECT s.name, t.name, tr.name, tr.is_instead_of_trigger, m.definition, te.type_desc
@@ -355,6 +373,16 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
           AND {SystemSchemaFilter} AND {SchemaScopeFilter}
         """;
 
+    // class 6 = a type-level property; the major id is the type's user_type_id.
+    private static readonly string TypeCommentSql = $"""
+        SELECT s.name, typ.name, CAST(ep.value AS nvarchar(max))
+        FROM sys.extended_properties ep
+        JOIN sys.types typ ON typ.user_type_id = ep.major_id
+        JOIN sys.schemas s ON s.schema_id = typ.schema_id
+        WHERE ep.class = 6 AND ep.name = '{DescriptionProperty}'
+          AND {SystemSchemaFilter} AND {SchemaScopeFilter}
+        """;
+
     // class 1, minor_id 0 = the object itself; filtered to the requested object type (U = table, V = view).
     private static string ObjectCommentSql(string objectType) => $"""
         SELECT s.name, o.name, CAST(ep.value AS nvarchar(max))
@@ -427,6 +455,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         List<TableGrantRow> tableGrants,
         List<TriggerRow> triggers,
         List<NativeTypeRow> nativeTypes,
+        List<AliasTypeRow> aliasTypes,
         Dictionary<(string, string), string> schemaComments,
         Dictionary<(string, string), string> tableComments,
         Dictionary<(string, string), string> viewComments,
@@ -435,7 +464,8 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         Dictionary<(string, string, string), string> columnComments,
         Dictionary<(string, string, string), string> indexComments,
         Dictionary<(string, string, string), string> constraintComments,
-        Dictionary<(string, string, string), string> triggerComments)
+        Dictionary<(string, string, string), string> triggerComments,
+        Dictionary<(string, string), string> typeComments)
     {
         var tablesBySchema = tables
             .GroupBy(t => t.Schema)
@@ -471,12 +501,23 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             .GroupBy(x => x.Schema)
             .ToDictionary(g => g.Key, g => g.Select(x => x.Type).DistinctBy(t => t.Name).ToList());
 
+        var domainsBySchema = aliasTypes
+            .GroupBy(t => t.Schema)
+            .ToDictionary(g => g.Key, g => g.Select(t => new DomainType
+            {
+                Name = t.Name,
+                DataType = MapSqlType(t.BaseType, "sys", t.MaxLength, t.Precision, t.Scale),
+                NotNull = !t.IsNullable,
+                Comment = typeComments.GetValueOrDefault((t.Schema, t.Name)),
+            }).ToList());
+
         var allSchemas = schemaNames
             .Union(tablesBySchema.Keys)
             .Union(viewsBySchema.Keys)
             .Union(sequencesBySchema.Keys)
             .Union(routinesBySchema.Keys)
             .Union(nativeTypesBySchema.Keys)
+            .Union(domainsBySchema.Keys)
             .Distinct(StringComparer.Ordinal)
             .OrderBy(n => n, StringComparer.Ordinal);
 
@@ -492,6 +533,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
                 Sequences = [.. sequencesBySchema.GetValueOrDefault(name, [])],
                 Routines = [.. routinesBySchema.GetValueOrDefault(name, [])],
                 NativeTypes = [.. nativeTypesBySchema.GetValueOrDefault(name, [])],
+                Domains = [.. domainsBySchema.GetValueOrDefault(name, [])],
             })
             .ToList();
 

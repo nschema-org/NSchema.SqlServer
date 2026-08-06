@@ -10,7 +10,15 @@ This package uses **lockstep major versioning** with the `NSchema.Core` package:
 
 As a consequence, breaking changes that are specific to this provider (rather than the core API) are signalled by a **minor version bump** rather than a major one, and called out explicitly in this changelog.
 
-## [Unreleased]
+## [5.5.0]
+
+### Added
+
+- **Alias types are domains.** A user-defined alias type (`CREATE TYPE … FROM base`) now introspects as a domain — base type, nullability, and `MS_Description` comment — and the dialect renders domain actions: create, drop, rename (`sp_rename … 'USERDATATYPE'`), recreate, and comment. A domain declaring a default or check constraints remains a clear diagnostic — alias types cannot carry them.
+
+### Changed
+
+- **Alias types left the vocabulary.** They were previously reported as `NativeType`s; a declaration the plan can create and drop is not vocabulary. CLR types remain vocabulary, and table types remain excluded.
 
 ### Fixed
 

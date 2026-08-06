@@ -73,11 +73,11 @@ public sealed class SqlServerDatabaseIntrospectorTests(SqlServerContainerFixture
         // Act
         var model = await Introspect(_schema);
 
-        // Assert — the column names its type in full, and the type itself joins the schema's vocabulary.
+        // Assert — the column names its type in full, and the type itself is a domain declaration.
         var schema = model.Schemas.Single(s => s.Name == _schema);
         schema.Tables.Single(t => t.Name == "prices").Columns.ShouldHaveSingleItem()
             .Type.ShouldBe(SqlType.Custom(_schema, "money_amount"));
-        schema.NativeTypes.ShouldHaveSingleItem().Name.ShouldBe("money_amount");
+        schema.Domains.ShouldHaveSingleItem().Name.ShouldBe("money_amount");
     }
 
     [Fact]
@@ -116,6 +116,34 @@ public sealed class SqlServerDatabaseIntrospectorTests(SqlServerContainerFixture
 
         // Assert — the vocabulary is filtered like everything else.
         model.Schemas.ShouldNotContain(s => s.Name == "sys");
+    }
+
+    // ── Domains (alias types) ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetDatabase_AliasType_IsADomain()
+    {
+        // Arrange
+        await Exec($"CREATE TYPE [{_schema}].[OrderNumber] FROM [nvarchar](25) NULL");
+        await Exec($"CREATE TYPE [{_schema}].[Flag] FROM [bit] NOT NULL");
+        await Exec($"EXECUTE sys.sp_addextendedproperty N'MS_Description', N'A yes/no flag.', N'SCHEMA', [{_schema}], N'TYPE', [Flag]");
+        await Exec($"CREATE TABLE [{_schema}].[orders] (num [{_schema}].[OrderNumber] NULL)");
+
+        // Act
+        var model = await Introspect(_schema);
+
+        // Assert
+        var schema = model.Schemas.Single(s => s.Name == _schema);
+        var flag = schema.Domains.Single(d => d.Name == "Flag");
+        flag.DataType.ShouldBe(SqlType.Boolean);
+        flag.NotNull.ShouldBeTrue();
+        flag.Comment.ShouldBe("A yes/no flag.");
+        var orderNumber = schema.Domains.Single(d => d.Name == "OrderNumber");
+        orderNumber.DataType.ShouldBe(SqlType.NVarChar(25));
+        orderNumber.NotNull.ShouldBeFalse();
+        schema.NativeTypes.ShouldBeEmpty(); // an alias type is a declaration now, not vocabulary
+        schema.Tables.ShouldHaveSingleItem().Columns.ShouldHaveSingleItem()
+            .Type.ShouldBe(SqlType.Custom(_schema, "OrderNumber"));
     }
 
     // ── Routines ──────────────────────────────────────────────────────────────
