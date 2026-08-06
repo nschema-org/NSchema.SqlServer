@@ -193,6 +193,54 @@ public sealed class SqlServerDatabaseIntrospectorTests(SqlServerContainerFixture
             .Tables.ShouldHaveSingleItem().Comment.ShouldBe("Padded description.");
     }
 
+    [Fact]
+    public async Task GetDatabase_ProcedureWithOptionsClause_KeepsWithInTheDefinition()
+    {
+        // Arrange — WITH EXECUTE AS … sits between the parameters and AS; it belongs to the definition,
+        // and its own AS must not end the header early.
+        await Exec($"""
+            CREATE PROCEDURE [{_schema}].[audited]
+                @id [int]
+            WITH EXECUTE AS CALLER
+            AS
+            BEGIN
+                SET NOCOUNT ON;
+            END;
+            """);
+
+        // Act
+        var model = await Introspect(_schema);
+
+        // Assert
+        var routine = model.Schemas.Single(s => s.Name == _schema).Routines.ShouldHaveSingleItem();
+        routine.Arguments.Value.ShouldBe("@id [int]");
+        routine.Definition.Value.ShouldStartWith("WITH EXECUTE AS CALLER");
+    }
+
+    [Fact]
+    public async Task GetDatabase_ModuleWithLeadingComments_SplitsCleanly()
+    {
+        // Arrange — sys.sql_modules stores the batch as written, comments before the CREATE included.
+        await Exec($"""
+            -- Logs errors.
+            -- Run from a CATCH block.
+            CREATE PROCEDURE [{_schema}].[log_error]
+                @id [int] = 0 OUTPUT -- the inserted ID
+            AS
+            BEGIN
+                SET NOCOUNT ON;
+            END;
+            """);
+
+        // Act
+        var model = await Introspect(_schema);
+
+        // Assert
+        var routine = model.Schemas.Single(s => s.Name == _schema).Routines.ShouldHaveSingleItem();
+        routine.Arguments.Value.ShouldBe("@id [int] = 0 OUTPUT -- the inserted ID");
+        routine.Definition.Value.ShouldStartWith("AS");
+    }
+
     // ── Views ─────────────────────────────────────────────────────────────────
 
     [Fact]

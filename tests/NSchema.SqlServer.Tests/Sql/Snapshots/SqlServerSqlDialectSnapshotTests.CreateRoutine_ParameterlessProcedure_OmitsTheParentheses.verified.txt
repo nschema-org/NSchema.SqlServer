@@ -1,0 +1,10 @@
+﻿[
+  {
+    Sql: CREATE PROCEDURE [dbo].[print_error] AS BEGIN SET NOCOUNT ON; END;,
+    RunOutsideTransaction: false
+  },
+  {
+    Sql: CREATE OR ALTER PROCEDURE [dbo].[print_error] AS BEGIN SET NOCOUNT OFF; END;,
+    RunOutsideTransaction: false
+  }
+]

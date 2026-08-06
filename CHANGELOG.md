@@ -10,6 +10,15 @@ This package uses **lockstep major versioning** with the `NSchema.Core` package:
 
 As a consequence, breaking changes that are specific to this provider (rather than the core API) are signalled by a **minor version bump** rather than a major one, and called out explicitly in this changelog.
 
+## [Unreleased]
+
+### Fixed
+
+- **Options clauses on procedures split correctly.** An options clause (`WITH EXECUTE AS …`, `WITH RECOMPILE`) ends the header too and stays with the definition.
+- **Comments before a module's `CREATE` no longer derail the split.** `sys.sql_modules` stores the batch as written, comments included; the leading trivia is now stepped over before the header is matched, for routines, views, and triggers.
+- **A parameter list ending in a line comment renders intact.** The closing parenthesis is printed on a new line rather than being swallowed by the comment.
+- **A parameter-less procedure renders without parentheses.** T-SQL rejects `CREATE PROCEDURE name()`; the empty list is omitted (functions keep theirs).
+
 ## [5.5.0] - 2026-08-06
 
 ### Added
@@ -24,7 +33,7 @@ As a consequence, breaking changes that are specific to this provider (rather th
 
 - **A view's introspected body is the bare query.** The trailing statement terminator `sys.sql_modules` preserves from the original `CREATE VIEW` is now stripped, so the introspected body matches what an author writes.
 - **Introspected comments are trimmed.** An `MS_Description` value with surrounding whitespace cannot be expressed by an NSQL doc comment, so it could never round-trip; values are trimmed on the way in and whitespace-only values are treated as no comment.
-- **Unparenthesized procedure headers split correctly.** A procedure declared without parentheses had its parameter list found by searching for a space-padded `AS`, which missed a newline-delimited header `AS` and could match one inside the body (a CTE's, an alias's). The header `AS` is now located by a scan that honours strings, bracketed identifiers, comments, parenthesis depth, and a parameter's own `@name AS type`.
+- **Unparenthesized procedure headers split correctly.** A procedure declared without parentheses had its parameter list found by searching for a space-padded `AS`, which missed a newline-delimited header `AS` and could match one inside the body (a CTE's, an alias's). The header `AS` is now located by a scan that honors strings, bracketed identifiers, comments, parenthesis depth, and a parameter's own `@name AS type`.
 
 ## [5.4.0] - 2026-08-03
 
