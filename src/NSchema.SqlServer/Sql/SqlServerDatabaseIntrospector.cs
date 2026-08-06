@@ -843,7 +843,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     // and so is a trailing statement terminator — the body is the query, as an author writes it.
     private static string ExtractViewBody(string moduleDefinition)
     {
-        moduleDefinition = moduleDefinition[SqlScanner.SkipLeadingTrivia(moduleDefinition)..];
+        moduleDefinition = moduleDefinition[SqlLexer.SkipLeadingTrivia(moduleDefinition)..];
         var match = ViewHeader().Match(moduleDefinition);
         return (match.Success ? moduleDefinition[match.Length..] : moduleDefinition).Trim().TrimEnd(';').TrimEnd();
     }
@@ -851,7 +851,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     // The body is everything after the first top-level AS that follows the trigger's ON … {AFTER|INSTEAD OF} … header.
     private static string ExtractTriggerBody(string moduleDefinition)
     {
-        moduleDefinition = moduleDefinition[SqlScanner.SkipLeadingTrivia(moduleDefinition)..];
+        moduleDefinition = moduleDefinition[SqlLexer.SkipLeadingTrivia(moduleDefinition)..];
         var match = TriggerHeader().Match(moduleDefinition);
         return (match.Success ? moduleDefinition[match.Length..] : moduleDefinition).Trim();
     }
@@ -861,14 +861,14 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     // parentheses on the next apply.
     private static (string Arguments, string Definition) SplitRoutineModule(string moduleDefinition)
     {
-        moduleDefinition = moduleDefinition[SqlScanner.SkipLeadingTrivia(moduleDefinition)..];
+        moduleDefinition = moduleDefinition[SqlLexer.SkipLeadingTrivia(moduleDefinition)..];
         var header = RoutineHeader().Match(moduleDefinition);
         var rest = (header.Success ? moduleDefinition[header.Length..] : moduleDefinition).TrimStart();
 
         if (rest.StartsWith('('))
         {
             // Token-based, so a parenthesis inside a string or comment cannot unbalance the count.
-            var scanner = new SqlScanner(rest);
+            var scanner = new SqlLexer(rest);
             var depth = 0;
             while (scanner.Next() is { Kind: not SqlTokenKind.End } token)
             {
@@ -893,7 +893,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     // scanner supplies the lexical layer: strings, quoted identifiers, and comments are already dealt with.
     private static int FindHeaderAs(string text)
     {
-        var scanner = new SqlScanner(text);
+        var scanner = new SqlLexer(text);
         var depth = 0;
         var afterParameterName = false;
         while (scanner.Next() is { Kind: not SqlTokenKind.End } token)

@@ -465,7 +465,7 @@ internal sealed class SqlServerSqlDialect : SqlDialect
             return "";
         }
 
-        var guarded = SqlScanner.EndsInLineComment(text) ? $"{text}\n" : text;
+        var guarded = SqlLexer.EndsInLineComment(text) ? $"{text}\n" : text;
         return $"({guarded})";
     }
 
