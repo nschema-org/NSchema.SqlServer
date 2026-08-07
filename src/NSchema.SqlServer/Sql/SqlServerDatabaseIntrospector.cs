@@ -9,6 +9,7 @@ using NSchema.Model.Indexes;
 using NSchema.Model.Routines;
 using NSchema.Model.Schemas;
 using NSchema.Model.Sequences;
+using NSchema.Model.Services;
 using NSchema.Model.Tables;
 using NSchema.Model.Triggers;
 using NSchema.Model.Types;
@@ -842,7 +843,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     // and so is a trailing statement terminator — the body is the query, as an author writes it.
     private static string ExtractViewBody(string moduleDefinition)
     {
-        moduleDefinition = SkipLeadingTrivia(moduleDefinition);
+        moduleDefinition = moduleDefinition[SqlLexer.SkipLeadingTrivia(moduleDefinition)..];
         var match = ViewHeader().Match(moduleDefinition);
         return (match.Success ? moduleDefinition[match.Length..] : moduleDefinition).Trim().TrimEnd(';').TrimEnd();
     }
@@ -850,47 +851,9 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     // The body is everything after the first top-level AS that follows the trigger's ON … {AFTER|INSTEAD OF} … header.
     private static string ExtractTriggerBody(string moduleDefinition)
     {
-        moduleDefinition = SkipLeadingTrivia(moduleDefinition);
+        moduleDefinition = moduleDefinition[SqlLexer.SkipLeadingTrivia(moduleDefinition)..];
         var match = TriggerHeader().Match(moduleDefinition);
         return (match.Success ? moduleDefinition[match.Length..] : moduleDefinition).Trim();
-    }
-
-    // sys.sql_modules stores the batch as written, and a batch may open with comments before its CREATE; the
-    // header regexes anchor at the start, so the trivia is stepped over first. It is not kept: an NSQL author's
-    // documentation is a doc comment, which import writes from MS_Description instead.
-    private static string SkipLeadingTrivia(string moduleDefinition)
-    {
-        var i = 0;
-        while (i < moduleDefinition.Length)
-        {
-            var c = moduleDefinition[i];
-            if (char.IsWhiteSpace(c))
-            {
-                i++;
-            }
-            else if (c == '-' && i + 1 < moduleDefinition.Length && moduleDefinition[i + 1] == '-')
-            {
-                while (i < moduleDefinition.Length && moduleDefinition[i] != '\n')
-                {
-                    i++;
-                }
-            }
-            else if (c == '/' && i + 1 < moduleDefinition.Length && moduleDefinition[i + 1] == '*')
-            {
-                var end = moduleDefinition.IndexOf("*/", i + 2, StringComparison.Ordinal);
-                if (end < 0)
-                {
-                    break;
-                }
-                i = end + 2;
-            }
-            else
-            {
-                break;
-            }
-        }
-
-        return moduleDefinition[i..];
     }
 
     // Splits a routine module into the parenthesised argument list and the remaining definition. A procedure declared
@@ -898,19 +861,24 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     // parentheses on the next apply.
     private static (string Arguments, string Definition) SplitRoutineModule(string moduleDefinition)
     {
-        moduleDefinition = SkipLeadingTrivia(moduleDefinition);
+        moduleDefinition = moduleDefinition[SqlLexer.SkipLeadingTrivia(moduleDefinition)..];
         var header = RoutineHeader().Match(moduleDefinition);
         var rest = (header.Success ? moduleDefinition[header.Length..] : moduleDefinition).TrimStart();
 
         if (rest.StartsWith('('))
         {
+            // Token-based, so a parenthesis inside a string or comment cannot unbalance the count.
+            var scanner = new SqlLexer(rest);
             var depth = 0;
-            for (var i = 0; i < rest.Length; i++)
+            while (scanner.Next() is { Kind: not SqlTokenKind.End } token)
             {
-                depth += rest[i] switch { '(' => 1, ')' => -1, _ => 0 };
-                if (depth == 0)
+                if (token.Kind == SqlTokenKind.LeftParen)
                 {
-                    return (rest[1..i].Trim(), rest[(i + 1)..].Trim());
+                    depth++;
+                }
+                else if (token.Kind == SqlTokenKind.RightParen && --depth == 0)
+                {
+                    return (rest[1..token.Start].Trim(), rest[(token.Start + 1)..].Trim());
                 }
             }
         }
@@ -919,115 +887,54 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         return asIndex < 0 ? ("", rest.Trim()) : (rest[..asIndex].Trim(), rest[asIndex..].Trim());
     }
 
-    // The word that ends an unparenthesised procedure header: the first whole-word AS — or WITH, opening the
-    // options clause (WITH RECOMPILE, WITH EXECUTE AS …), which stays with the definition — at parenthesis
-    // depth zero, outside strings, bracketed or quoted identifiers, and comments (T-SQL block comments nest).
-    // A parameter's own AS (@name AS type), which directly follows a parameter name, does not end the header.
+    // The word that ends an unparenthesised procedure header: the first whole-word AS at parenthesis depth
+    // zero that is not a parameter's own AS (@name AS type) — or the WITH opening an options clause
+    // (EXECUTE AS, RECOMPILE), which equally ends the parameter list and stays with the definition. The
+    // scanner supplies the lexical layer: strings, quoted identifiers, and comments are already dealt with.
     private static int FindHeaderAs(string text)
     {
+        var scanner = new SqlLexer(text);
         var depth = 0;
         var afterParameterName = false;
-        var i = 0;
-        while (i < text.Length)
+        while (scanner.Next() is { Kind: not SqlTokenKind.End } token)
         {
-            var c = text[i];
-            if (c == '-' && i + 1 < text.Length && text[i + 1] == '-')
+            switch (token.Kind)
             {
-                while (i < text.Length && text[i] != '\n')
-                {
-                    i++;
-                }
-            }
-            else if (c == '/' && i + 1 < text.Length && text[i + 1] == '*')
-            {
-                var nesting = 1;
-                i += 2;
-                while (i < text.Length && nesting > 0)
-                {
-                    if (text[i] == '/' && i + 1 < text.Length && text[i + 1] == '*')
-                    {
-                        nesting++;
-                        i += 2;
-                    }
-                    else if (text[i] == '*' && i + 1 < text.Length && text[i + 1] == '/')
-                    {
-                        nesting--;
-                        i += 2;
-                    }
-                    else
-                    {
-                        i++;
-                    }
-                }
-            }
-            else if (c is '\'' or '"' or '[')
-            {
-                afterParameterName = false;
-                var close = c == '[' ? ']' : c;
-                i++;
-                while (i < text.Length)
-                {
-                    if (text[i] == close)
-                    {
-                        // A doubled closer is an escape, not the end.
-                        if (i + 1 < text.Length && text[i + 1] == close)
-                        {
-                            i += 2;
-                            continue;
-                        }
-                        i++;
-                        break;
-                    }
-                    i++;
-                }
-            }
-            else if (c == '(')
-            {
-                afterParameterName = false;
-                depth++;
-                i++;
-            }
-            else if (c == ')')
-            {
-                afterParameterName = false;
-                depth--;
-                i++;
-            }
-            else if (char.IsLetter(c) || c is '_' or '@' or '#')
-            {
-                var start = i;
-                while (i < text.Length && (char.IsLetterOrDigit(text[i]) || text[i] is '_' or '@' or '#' or '$'))
-                {
-                    i++;
-                }
-                if (depth == 0)
-                {
-                    var word = text.AsSpan(start..i);
-                    if (word.Equals("AS", StringComparison.OrdinalIgnoreCase))
+                case SqlTokenKind.LeftParen:
+                    depth++;
+                    afterParameterName = false;
+                    break;
+
+                case SqlTokenKind.RightParen:
+                    depth--;
+                    afterParameterName = false;
+                    break;
+
+                case SqlTokenKind.Word when depth == 0:
+                    if (token.Value.Equals("AS", StringComparison.OrdinalIgnoreCase))
                     {
                         if (!afterParameterName)
                         {
-                            return start;
+                            return token.Start;
                         }
                         afterParameterName = false;
                     }
-                    else if (word.Equals("WITH", StringComparison.OrdinalIgnoreCase))
+                    else if (token.Value.Equals("WITH", StringComparison.OrdinalIgnoreCase))
                     {
-                        return start;
+                        return token.Start;
                     }
                     else
                     {
-                        afterParameterName = c == '@';
+                        afterParameterName = token.Value.StartsWith('@');
                     }
-                }
-            }
-            else
-            {
-                if (!char.IsWhiteSpace(c))
-                {
+                    break;
+
+                case SqlTokenKind.Word:
+                    break; // inside parentheses only the depth matters
+
+                default:
                     afterParameterName = false;
-                }
-                i++;
+                    break;
             }
         }
 
