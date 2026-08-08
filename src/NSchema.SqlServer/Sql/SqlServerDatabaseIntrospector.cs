@@ -14,6 +14,7 @@ using NSchema.Model.Tables;
 using NSchema.Model.Triggers;
 using NSchema.Model.Types;
 using NSchema.Model.Views;
+using NSchema.Model.XmlSchemaCollections;
 
 namespace NSchema.SqlServer.Sql;
 
@@ -79,6 +80,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         var checkConstraints = await QueryCheckConstraints(connection, schemas, cancellationToken);
         var indexes = await QueryIndexes(connection, schemas, cancellationToken);
         var views = await QueryViews(connection, schemas, cancellationToken);
+        var xmlSchemaCollections = await QueryXmlSchemaCollections(connection, schemas, cancellationToken);
         var sequences = await QuerySequences(connection, schemas, cancellationToken);
         var routines = await QueryRoutines(connection, schemas, cancellationToken);
         var tableGrants = await QueryTableGrants(connection, schemas, cancellationToken);
@@ -98,7 +100,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         var typeComments = await QueryComments(connection, schemas, TypeCommentSql, cancellationToken);
 
         return Build(schemaNamesInDb, tables, columns, primaryKeys, uniqueConstraints, foreignKeys, checkConstraints,
-            indexes, views, sequences, routines, tableGrants, triggers, nativeTypes, aliasTypes,
+            indexes, views, xmlSchemaCollections, sequences, routines, tableGrants, triggers, nativeTypes, aliasTypes,
             schemaComments, tableComments, viewComments, sequenceComments, routineComments,
             columnComments, indexComments, constraintComments, triggerComments, typeComments);
     }
@@ -107,7 +109,8 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
 
     private sealed record TableRow(string Schema, string Name);
     private sealed record ColumnRow(string Schema, string Table, string Name, string TypeName, int MaxLength, int Precision, int Scale,
-        bool IsNullable, bool IsIdentity, long? Seed, long? Increment, string? Computed, string? Default, string TypeSchema);
+        bool IsNullable, bool IsIdentity, long? Seed, long? Increment, string? Computed, string? Default, string TypeSchema,
+        string? XmlCollectionSchema, string? XmlCollection, bool XmlIsDocument);
     private sealed record NativeTypeRow(string Schema, string Name);
     private sealed record AliasTypeRow(string Schema, string Name, string BaseType, int MaxLength, int Precision, int Scale, bool IsNullable);
     private sealed record KeyColumnRow(string Schema, string Table, string Constraint, string Column);
@@ -117,6 +120,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     private sealed record IndexColumnRow(string Schema, string Owner, string Index, string Column, bool IsIncluded, bool IsDescending, bool IsUnique, string? Filter,
         int IndexType, string? XmlSecondaryType, string? XmlPrimaryIndex);
     private sealed record ViewRow(string Schema, string Name, string Definition, bool IsSchemaBound);
+    private sealed record XmlSchemaCollectionRow(string Schema, string Name, string Body);
     private sealed record SequenceRow(string Schema, string Name, string TypeName, long Start, long Increment, long Min, long Max, bool Cycle, bool IsCached, int? CacheSize);
     private sealed record RoutineRow(string Schema, string Name, bool IsProcedure, string Definition);
     private sealed record TableGrantRow(string Schema, string Table, string Role, string Privilege);
@@ -167,7 +171,8 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
                col.max_length, col.precision, col.scale,
                col.is_nullable, col.is_identity,
                CAST(ic.seed_value AS bigint), CAST(ic.increment_value AS bigint),
-               cc.definition, dc.definition, SCHEMA_NAME(typ.schema_id)
+               cc.definition, dc.definition, SCHEMA_NAME(typ.schema_id),
+               SCHEMA_NAME(xsc.schema_id), xsc.name, col.is_xml_document
         FROM sys.columns col
         JOIN sys.tables t ON t.object_id = col.object_id
         JOIN sys.schemas s ON s.schema_id = t.schema_id
@@ -175,6 +180,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         LEFT JOIN sys.identity_columns ic ON ic.object_id = col.object_id AND ic.column_id = col.column_id
         LEFT JOIN sys.computed_columns cc ON cc.object_id = col.object_id AND cc.column_id = col.column_id
         LEFT JOIN sys.default_constraints dc ON dc.parent_object_id = col.object_id AND dc.parent_column_id = col.column_id
+        LEFT JOIN sys.xml_schema_collections xsc ON xsc.xml_collection_id = col.xml_collection_id
         WHERE {SystemSchemaFilter} AND {SchemaScopeFilter}
         ORDER BY s.name, t.name, col.column_id
         """, schemas, r => new ColumnRow(
@@ -183,7 +189,8 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             r.GetBoolean(7), r.GetBoolean(8),
             r.IsDBNull(9) ? null : r.GetInt64(9), r.IsDBNull(10) ? null : r.GetInt64(10),
             r.IsDBNull(11) ? null : r.GetString(11), r.IsDBNull(12) ? null : r.GetString(12),
-            r.GetString(13)), ct);
+            r.GetString(13),
+            r.IsDBNull(14) ? null : r.GetString(14), r.IsDBNull(15) ? null : r.GetString(15), r.GetBoolean(16)), ct);
 
     private static Task<List<KeyColumnRow>> QueryKeyConstraints(DbConnection c, string[]? schemas, string type, CancellationToken ct) => Query(c, $"""
         SELECT s.name, t.name, kc.name, col.name
@@ -243,6 +250,16 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         """, schemas, r => new IndexColumnRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3),
             r.GetBoolean(4), r.GetBoolean(5), r.GetBoolean(6), r.IsDBNull(7) ? null : r.GetString(7),
             r.GetByte(8), r.IsDBNull(9) ? null : r.GetString(9), r.IsDBNull(10) ? null : r.GetString(10)), ct);
+
+    // A collection is stored shredded across sys.xml_schema_* ; XML_SCHEMA_NAMESPACE reassembles it into the
+    // single document it was declared as, which is the form that can be declared again.
+    private static Task<List<XmlSchemaCollectionRow>> QueryXmlSchemaCollections(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
+        SELECT s.name, x.name, CAST(XML_SCHEMA_NAMESPACE(s.name, x.name) AS nvarchar(max))
+        FROM sys.xml_schema_collections x
+        JOIN sys.schemas s ON s.schema_id = x.schema_id
+        WHERE x.name <> 'sys' AND {SystemSchemaFilter} AND {SchemaScopeFilter}
+        ORDER BY s.name, x.name
+        """, schemas, r => new XmlSchemaCollectionRow(r.GetString(0), r.GetString(1), r.GetString(2)), ct);
 
     // WITH SCHEMABINDING is a header clause, and the body is stored as the text after AS, so the binding
     // cannot ride the body: it is read from the catalog and declared on the model.
@@ -465,6 +482,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         List<CheckRow> checkConstraints,
         List<IndexColumnRow> indexes,
         List<ViewRow> views,
+        List<XmlSchemaCollectionRow> xmlSchemaCollections,
         List<SequenceRow> sequences,
         List<RoutineRow> routines,
         List<TableGrantRow> tableGrants,
@@ -496,6 +514,14 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
                 IsSchemaBound = v.IsSchemaBound,
                 Comment = viewComments.GetValueOrDefault((v.Schema, v.Name)),
                 Indexes = [.. BuildIndexes(indexes, indexComments, v.Schema, v.Name)],
+            }).ToList());
+
+        var xmlSchemaCollectionsBySchema = xmlSchemaCollections
+            .GroupBy(x => x.Schema)
+            .ToDictionary(g => g.Key, g => g.Select(x => new XmlSchemaCollection
+            {
+                Name = x.Name,
+                Body = Literal(x.Body),
             }).ToList());
 
         var sequencesBySchema = sequences
@@ -547,6 +573,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
                 Comment = schemaComments.GetValueOrDefault((name, name)),
                 Tables = [.. tablesBySchema.GetValueOrDefault(name, [])],
                 Views = [.. viewsBySchema.GetValueOrDefault(name, [])],
+                XmlSchemaCollections = [.. xmlSchemaCollectionsBySchema.GetValueOrDefault(name, [])],
                 Sequences = [.. sequencesBySchema.GetValueOrDefault(name, [])],
                 Routines = [.. routinesBySchema.GetValueOrDefault(name, [])],
                 NativeTypes = [.. nativeTypesBySchema.GetValueOrDefault(name, [])],
@@ -580,7 +607,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             .Select(c => new Column
             {
                 Name = c.Name,
-                Type = MapSqlType(c.TypeName, c.TypeSchema, c.MaxLength, c.Precision, c.Scale),
+                Type = WithXmlBinding(MapSqlType(c.TypeName, c.TypeSchema, c.MaxLength, c.Precision, c.Scale), c),
                 IsNullable = c.IsNullable,
                 IsIdentity = c.IsIdentity,
                 DefaultExpression = c.Computed is null ? StripParens(c.Default) : null,
@@ -733,6 +760,22 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             "PROPERTY" => XmlIndexKind.Property,
             _ => XmlIndexKind.Primary,
         }, row.XmlPrimaryIndex);
+
+    /// <summary>
+    /// The column's type, carrying the XML schema collection it is validated against when it has one. An untyped
+    /// xml column has no collection, and every other type never does.
+    /// </summary>
+    private static SqlType WithXmlBinding(SqlType type, ColumnRow row) =>
+        row.XmlCollection is { } collection && row.XmlCollectionSchema is { } schema
+            ? type with { Xml = new XmlTypeBinding(new ObjectAddress(schema, collection, SchemaObjectKind.XmlSchemaCollection), row.XmlIsDocument) }
+            : type;
+
+    /// <summary>
+    /// The collection's XSD as a T-SQL string literal. The catalog hands back raw XML, but the body is stored
+    /// the way it is declared — an expression the dialect can render straight into a CREATE — so it is quoted
+    /// here rather than at every use.
+    /// </summary>
+    private static string Literal(string xml) => $"N'{xml.Replace("'", "''")}'";
 
     private static TableIndex BuildIndex(string name, List<IndexColumnRow> columns, string? comment)
     {

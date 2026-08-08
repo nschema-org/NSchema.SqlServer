@@ -18,6 +18,7 @@ using NSchema.Plan.Domain.Sequences;
 using NSchema.Plan.Domain.Tables;
 using NSchema.Plan.Domain.Triggers;
 using NSchema.Plan.Domain.Views;
+using NSchema.Plan.Domain.XmlSchemaCollections;
 using NSchema.Plan.Plugins;
 
 namespace NSchema.SqlServer.Sql;
@@ -319,6 +320,16 @@ internal sealed class SqlServerSqlDialect : SqlDialect
 
     protected override Result<IReadOnlyList<SqlStatement>> SetTriggerComment(SetTriggerComment action) =>
         ExtendedProperty(action.OldComment, action.NewComment, ("SCHEMA", action.Trigger.Schema), ("TABLE", action.Trigger.Object), ("TRIGGER", action.Trigger.Member));
+
+    // ── XML schema collections ────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    protected override Result<IReadOnlyList<SqlStatement>> CreateXmlSchemaCollection(CreateXmlSchemaCollection action) =>
+        Statement($"CREATE XML SCHEMA COLLECTION {Qualify(action.SchemaName, action.Collection.Name)} AS {action.Collection.Body}");
+
+    /// <inheritdoc />
+    protected override Result<IReadOnlyList<SqlStatement>> DropXmlSchemaCollection(DropXmlSchemaCollection action) =>
+        Statement($"DROP XML SCHEMA COLLECTION {Qualify(action.Collection)}");
 
     // ── Views ─────────────────────────────────────────────────────────────────
 
@@ -629,7 +640,13 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         return Statement(sb.ToString());
     }
 
-    private string TypeSql(SqlType type) => type.Name.Value.ToLowerInvariant() switch
+    // A typed xml names the collection it validates against where another type carries a length or precision;
+    // without it the column is untyped, and an XQuery expression over it no longer binds.
+    private string TypeSql(SqlType type) => type.Xml is { } xml
+        ? $"xml({(xml.IsDocument ? "DOCUMENT" : "CONTENT")} {Qualify(xml.Collection)})"
+        : BareTypeSql(type);
+
+    private string BareTypeSql(SqlType type) => type.Name.Value.ToLowerInvariant() switch
     {
         "boolean" => "bit",
         "tinyint" => "tinyint",
