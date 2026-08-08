@@ -14,6 +14,7 @@ As a consequence, breaking changes that are specific to this provider (rather th
 
 ### Added
 
+- **XML indexes round-trip.** `sys.xml_indexes` supplies the kind and, for a secondary, the primary whose node table it reads (`i.type` identifies an XML index, since `secondary_type_desc` is null for a primary as well as for a non-XML index).
 - **Indexed views round-trip.** Indexes are read from `sys.objects` rather than `sys.tables`, so a view's indexes are introspected onto `View.Indexes` alongside a table's.
 - **Schema binding round-trips.** `WITH SCHEMABINDING` is read from `sys.sql_modules.is_schema_bound` onto `View.IsSchemaBound` and written back from it.
 
