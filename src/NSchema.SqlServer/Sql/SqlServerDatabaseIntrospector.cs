@@ -114,7 +114,8 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     private sealed record ForeignKeyRow(string Schema, string Table, string Constraint, string Column,
         string RefSchema, string RefTable, string RefColumn, int DeleteAction, int UpdateAction);
     private sealed record CheckRow(string Schema, string Table, string Name, string Definition);
-    private sealed record IndexColumnRow(string Schema, string Owner, string Index, string Column, bool IsIncluded, bool IsDescending, bool IsUnique, string? Filter);
+    private sealed record IndexColumnRow(string Schema, string Owner, string Index, string Column, bool IsIncluded, bool IsDescending, bool IsUnique, string? Filter,
+        int IndexType, string? XmlSecondaryType, string? XmlPrimaryIndex);
     private sealed record ViewRow(string Schema, string Name, string Definition, bool IsSchemaBound);
     private sealed record SequenceRow(string Schema, string Name, string TypeName, long Start, long Increment, long Min, long Max, bool Cycle, bool IsCached, int? CacheSize);
     private sealed record RoutineRow(string Schema, string Name, bool IsProcedure, string Definition);
@@ -221,20 +222,27 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         """, schemas, r => new CheckRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3)), ct);
 
     // Indexes hang off sys.objects rather than sys.tables because a view carries them too: an indexed view is
-    // a view with a unique clustered index on it, and reading only tables loses it silently.
+    // a view with a unique clustered index on it, and reading only tables loses it silently. An XML index is a
+    // row in sys.xml_indexes as well: secondary_type says which form it takes (null for the primary), and a
+    // secondary's using_xml_index_id names the primary whose node table it reads. secondary_type_desc is null
+    // for a primary as well as for a non-XML index, so the kind comes from i.type rather than from its absence.
     private static Task<List<IndexColumnRow>> QueryIndexes(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
-        SELECT s.name, o.name, i.name, col.name, ic.is_included_column, ic.is_descending_key, i.is_unique, i.filter_definition
+        SELECT s.name, o.name, i.name, col.name, ic.is_included_column, ic.is_descending_key, i.is_unique, i.filter_definition,
+               i.type, xi.secondary_type_desc, px.name
         FROM sys.indexes i
         JOIN sys.objects o ON o.object_id = i.object_id
         JOIN sys.schemas s ON s.schema_id = o.schema_id
         JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
         JOIN sys.columns col ON col.object_id = ic.object_id AND col.column_id = ic.column_id
+        LEFT JOIN sys.xml_indexes xi ON xi.object_id = i.object_id AND xi.index_id = i.index_id
+        LEFT JOIN sys.xml_indexes px ON px.object_id = xi.object_id AND px.index_id = xi.using_xml_index_id
         WHERE i.is_primary_key = 0 AND i.is_unique_constraint = 0 AND i.type <> 0 AND i.is_hypothetical = 0
           AND o.type IN ('U', 'V') AND o.is_ms_shipped = 0
           AND {SystemSchemaFilter} AND {SchemaScopeFilter}
         ORDER BY s.name, o.name, i.name, ic.is_included_column, ic.key_ordinal, ic.index_column_id
         """, schemas, r => new IndexColumnRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3),
-            r.GetBoolean(4), r.GetBoolean(5), r.GetBoolean(6), r.IsDBNull(7) ? null : r.GetString(7)), ct);
+            r.GetBoolean(4), r.GetBoolean(5), r.GetBoolean(6), r.IsDBNull(7) ? null : r.GetString(7),
+            r.GetByte(8), r.IsDBNull(9) ? null : r.GetString(9), r.IsDBNull(10) ? null : r.GetString(10)), ct);
 
     // WITH SCHEMABINDING is a header clause, and the body is stored as the text after AS, so the binding
     // cannot ride the body: it is read from the catalog and declared on the model.
@@ -712,6 +720,20 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             .GroupBy(i => i.Index)
             .Select(g => BuildIndex(g.Key, g.ToList(), indexComments.GetValueOrDefault((schema, owner, g.Key))))];
 
+    // index type 3 is an XML index. A primary has no secondary_type_desc and reads the column itself; every
+    // other form reads a primary's node table and names it.
+    private const int XmlIndexType = 3;
+
+    private static XmlIndexDefinition? BuildXmlIndex(IndexColumnRow row) => row.IndexType != XmlIndexType
+        ? null
+        : new XmlIndexDefinition(row.XmlSecondaryType switch
+        {
+            "PATH" => XmlIndexKind.Path,
+            "VALUE" => XmlIndexKind.Value,
+            "PROPERTY" => XmlIndexKind.Property,
+            _ => XmlIndexKind.Primary,
+        }, row.XmlPrimaryIndex);
+
     private static TableIndex BuildIndex(string name, List<IndexColumnRow> columns, string? comment)
     {
         var keys = columns.Where(c => !c.IsIncluded)
@@ -728,6 +750,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             Predicate = StripParens(first.Filter),
             Method = null,
             Include = include,
+            Xml = BuildXmlIndex(first),
         };
     }
 

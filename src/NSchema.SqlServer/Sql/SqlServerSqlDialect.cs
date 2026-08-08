@@ -180,6 +180,11 @@ internal sealed class SqlServerSqlDialect : SqlDialect
     /// </param>
     private Result<string> IndexSql(ObjectAddress owner, TableIndex idx, bool onView)
     {
+        if (idx.Xml is { } xml)
+        {
+            return XmlIndexSql(owner, idx, xml);
+        }
+
         if (idx.Method is not null)
         {
             return UnsupportedFragment($"SQL Server indexes have no access method (USING) — index {idx.Name} specifies {idx.Method}.");
@@ -212,6 +217,46 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         var include = idx.Include.Count > 0 ? $" INCLUDE ({ColumnList(idx.Include)})" : "";
         var sql = $"CREATE {unique}{clustered}INDEX {Quote(idx.Name)} ON {Qualify(owner)} ({string.Join(", ", keys)}){include}";
         return Result.Success(idx.Predicate is { } predicate ? $"{sql} WHERE {predicate}" : sql);
+    }
+
+    /// <summary>
+    /// One XML index: the node table itself, or a b-tree over one that already exists.
+    /// </summary>
+    /// <remarks>
+    /// An XML index indexes a shredded document rather than a value, so the facets of an ordinary index have
+    /// nothing to mean here — SQL Server accepts no uniqueness, no <c>INCLUDE</c>, and no filter on one, and its
+    /// single key names the XML column. Each is refused rather than dropped silently.
+    /// </remarks>
+    private Result<string> XmlIndexSql(ObjectAddress owner, TableIndex idx, XmlIndexDefinition xml)
+    {
+        if (idx.IsUnique || idx.Include.Count > 0 || idx.Predicate is not null || idx.Method is not null)
+        {
+            return UnsupportedFragment($"XML index {idx.Name} cannot be unique, carry INCLUDE columns, take a filter, or name an access method.");
+        }
+
+        if (idx.Columns is not [{ Column: { } column, Sort: IndexSort.Default, Nulls: IndexNulls.Default }])
+        {
+            return UnsupportedFragment($"XML index {idx.Name} indexes exactly one XML column, without a sort direction.");
+        }
+
+        var target = $"{Quote(idx.Name)} ON {Qualify(owner)} ({Quote(column)})";
+        if (xml.IsPrimary)
+        {
+            return Result.Success($"CREATE PRIMARY XML INDEX {target}");
+        }
+
+        if (xml.PrimaryIndex is not { } primary)
+        {
+            return UnsupportedFragment($"XML index {idx.Name} is a {xml.Kind} index, so it must name the primary XML index whose node table it reads.");
+        }
+
+        var kind = xml.Kind switch
+        {
+            XmlIndexKind.Path => "PATH",
+            XmlIndexKind.Value => "VALUE",
+            _ => "PROPERTY",
+        };
+        return Result.Success($"CREATE XML INDEX {target} USING XML INDEX {Quote(primary)} FOR {kind}");
     }
 
     protected override Result<IReadOnlyList<SqlStatement>> DropIndex(DropIndex action) =>
