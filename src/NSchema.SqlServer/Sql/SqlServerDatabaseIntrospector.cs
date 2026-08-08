@@ -114,8 +114,8 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     private sealed record ForeignKeyRow(string Schema, string Table, string Constraint, string Column,
         string RefSchema, string RefTable, string RefColumn, int DeleteAction, int UpdateAction);
     private sealed record CheckRow(string Schema, string Table, string Name, string Definition);
-    private sealed record IndexColumnRow(string Schema, string Table, string Index, string Column, bool IsIncluded, bool IsDescending, bool IsUnique, string? Filter);
-    private sealed record ViewRow(string Schema, string Name, string Definition);
+    private sealed record IndexColumnRow(string Schema, string Owner, string Index, string Column, bool IsIncluded, bool IsDescending, bool IsUnique, string? Filter);
+    private sealed record ViewRow(string Schema, string Name, string Definition, bool IsSchemaBound);
     private sealed record SequenceRow(string Schema, string Name, string TypeName, long Start, long Increment, long Min, long Max, bool Cycle, bool IsCached, int? CacheSize);
     private sealed record RoutineRow(string Schema, string Name, bool IsProcedure, string Definition);
     private sealed record TableGrantRow(string Schema, string Table, string Role, string Privilege);
@@ -220,27 +220,32 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         ORDER BY s.name, t.name, cc.name
         """, schemas, r => new CheckRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3)), ct);
 
+    // Indexes hang off sys.objects rather than sys.tables because a view carries them too: an indexed view is
+    // a view with a unique clustered index on it, and reading only tables loses it silently.
     private static Task<List<IndexColumnRow>> QueryIndexes(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
-        SELECT s.name, t.name, i.name, col.name, ic.is_included_column, ic.is_descending_key, i.is_unique, i.filter_definition
+        SELECT s.name, o.name, i.name, col.name, ic.is_included_column, ic.is_descending_key, i.is_unique, i.filter_definition
         FROM sys.indexes i
-        JOIN sys.tables t ON t.object_id = i.object_id
-        JOIN sys.schemas s ON s.schema_id = t.schema_id
+        JOIN sys.objects o ON o.object_id = i.object_id
+        JOIN sys.schemas s ON s.schema_id = o.schema_id
         JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
         JOIN sys.columns col ON col.object_id = ic.object_id AND col.column_id = ic.column_id
         WHERE i.is_primary_key = 0 AND i.is_unique_constraint = 0 AND i.type <> 0 AND i.is_hypothetical = 0
+          AND o.type IN ('U', 'V') AND o.is_ms_shipped = 0
           AND {SystemSchemaFilter} AND {SchemaScopeFilter}
-        ORDER BY s.name, t.name, i.name, ic.is_included_column, ic.key_ordinal, ic.index_column_id
+        ORDER BY s.name, o.name, i.name, ic.is_included_column, ic.key_ordinal, ic.index_column_id
         """, schemas, r => new IndexColumnRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3),
             r.GetBoolean(4), r.GetBoolean(5), r.GetBoolean(6), r.IsDBNull(7) ? null : r.GetString(7)), ct);
 
+    // WITH SCHEMABINDING is a header clause, and the body is stored as the text after AS, so the binding
+    // cannot ride the body: it is read from the catalog and declared on the model.
     private static Task<List<ViewRow>> QueryViews(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
-        SELECT s.name, v.name, m.definition
+        SELECT s.name, v.name, m.definition, m.is_schema_bound
         FROM sys.views v
         JOIN sys.schemas s ON s.schema_id = v.schema_id
         JOIN sys.sql_modules m ON m.object_id = v.object_id
         WHERE {SystemSchemaFilter} AND {SchemaScopeFilter}
         ORDER BY s.name, v.name
-        """, schemas, r => new ViewRow(r.GetString(0), r.GetString(1), r.GetString(2)), ct);
+        """, schemas, r => new ViewRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetBoolean(3)), ct);
 
     private static Task<List<SequenceRow>> QuerySequences(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
         SELECT s.name, seq.name, typ.name,
@@ -405,12 +410,13 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
           AND {SystemSchemaFilter} AND {SchemaScopeFilter}
         """;
 
-    // class 7 = index property (major_id = table object, minor_id = index_id).
+    // class 7 = index property (major_id = the owning relation, minor_id = index_id). The owner is a table or
+    // a view, matching the index read itself.
     private static readonly string IndexCommentSql = $"""
-        SELECT s.name, t.name, i.name, CAST(ep.value AS nvarchar(max))
+        SELECT s.name, o.name, i.name, CAST(ep.value AS nvarchar(max))
         FROM sys.extended_properties ep
-        JOIN sys.tables t ON t.object_id = ep.major_id
-        JOIN sys.schemas s ON s.schema_id = t.schema_id
+        JOIN sys.objects o ON o.object_id = ep.major_id AND o.type IN ('U', 'V')
+        JOIN sys.schemas s ON s.schema_id = o.schema_id
         JOIN sys.indexes i ON i.object_id = ep.major_id AND i.index_id = ep.minor_id
         WHERE ep.class = 7 AND ep.name = '{DescriptionProperty}'
           AND {SystemSchemaFilter} AND {SchemaScopeFilter}
@@ -479,7 +485,9 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             {
                 Name = v.Name,
                 Body = ExtractViewBody(v.Definition),
+                IsSchemaBound = v.IsSchemaBound,
                 Comment = viewComments.GetValueOrDefault((v.Schema, v.Name)),
+                Indexes = [.. BuildIndexes(indexes, indexComments, v.Schema, v.Name)],
             }).ToList());
 
         var sequencesBySchema = sequences
@@ -625,11 +633,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             })
             .ToList();
 
-        var indexes = allIndexes
-            .Where(i => Owns(i.Schema, i.Table))
-            .GroupBy(i => i.Index)
-            .Select(g => BuildIndex(g.Key, g.ToList(), indexComments.GetValueOrDefault((table.Schema, table.Name, g.Key))))
-            .ToList();
+        var indexes = BuildIndexes(allIndexes, indexComments, table.Schema, table.Name);
 
         var grants = allGrants
             .Where(g => Owns(g.Schema, g.Table))
@@ -693,6 +697,20 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             "DELETE" => TablePrivilege.Delete,
             _ => TablePrivilege.None,
         });
+
+    /// <summary>
+    /// The indexes one relation owns. A table and a view are read the same way — an indexed view's index is an
+    /// index like any other, and the only thing that makes it special is that the view cannot exist without it.
+    /// </summary>
+    private static List<TableIndex> BuildIndexes(
+        List<IndexColumnRow> allIndexes,
+        Dictionary<(string, string, string), string> indexComments,
+        string schema,
+        string owner) =>
+        [.. allIndexes
+            .Where(i => i.Schema == schema && i.Owner == owner)
+            .GroupBy(i => i.Index)
+            .Select(g => BuildIndex(g.Key, g.ToList(), indexComments.GetValueOrDefault((schema, owner, g.Key))))];
 
     private static TableIndex BuildIndex(string name, List<IndexColumnRow> columns, string? comment)
     {

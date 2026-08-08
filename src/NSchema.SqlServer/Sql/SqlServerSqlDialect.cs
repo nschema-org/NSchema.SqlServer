@@ -6,6 +6,7 @@ using NSchema.Model.Indexes;
 using NSchema.Model.Routines;
 using NSchema.Model.Services;
 using NSchema.Model.Triggers;
+using NSchema.Model.Views;
 using NSchema.Plan.Domain;
 using NSchema.Plan.Domain.Columns;
 using NSchema.Plan.Domain.Constraints;
@@ -61,6 +62,10 @@ internal sealed class SqlServerSqlDialect : SqlDialect
     /// <summary>A failed rendering with a SQL Server-specific explanation.</summary>
     private static Result<IReadOnlyList<SqlStatement>> Error(DiagnosticCode code, FormattedText message) =>
         Result.Failure<IReadOnlyList<SqlStatement>>(Diagnostic.Error(Source, code, message));
+
+    /// <summary>A facet SQL Server cannot express, reported by a helper that renders a fragment rather than an action.</summary>
+    private static Result<string> UnsupportedFragment(FormattedText message) =>
+        Result.Failure<string>(Diagnostic.Error(Source, "unsupported", message));
 
     // ── Schemas ───────────────────────────────────────────────────────────────
     // CREATE SCHEMA / DROP SCHEMA use the base forms. SQL Server has no schema rename (objects are transferred
@@ -157,10 +162,27 @@ internal sealed class SqlServerSqlDialect : SqlDialect
 
     protected override Result<IReadOnlyList<SqlStatement>> CreateIndex(CreateIndex action)
     {
-        var idx = action.Index;
+        var sql = IndexSql(action.Table, action.Index, action.OnView);
+        return sql.IsFailure
+            ? Result.Failure<IReadOnlyList<SqlStatement>>(sql.Diagnostics)
+            : Statement(sql.Require());
+    }
+
+    /// <summary>
+    /// One <c>CREATE INDEX</c>, or the reason SQL Server has no way to write it.
+    /// </summary>
+    /// <param name="owner">The table or view the index attaches to.</param>
+    /// <param name="idx">The index to render.</param>
+    /// <param name="onView">
+    /// Whether the owner is a view. An indexed view's index has to be the clustered one — SQL Server refuses a
+    /// nonclustered index on a view that has no unique clustered index — and only one index on a relation can be
+    /// clustered, so the unique index that makes the view an indexed view is it.
+    /// </param>
+    private Result<string> IndexSql(ObjectAddress owner, TableIndex idx, bool onView)
+    {
         if (idx.Method is not null)
         {
-            return Unsupported($"SQL Server indexes have no access method (USING) — index {idx.Name} specifies {idx.Method}.");
+            return UnsupportedFragment($"SQL Server indexes have no access method (USING) — index {idx.Name} specifies {idx.Method}.");
         }
 
         var keys = new List<string>();
@@ -168,12 +190,12 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         {
             if (col.Column is null)
             {
-                return Unsupported($"SQL Server cannot index the expression {col.Expression} directly; add a computed column and index that instead.");
+                return UnsupportedFragment($"SQL Server cannot index the expression {col.Expression} directly; add a computed column and index that instead.");
             }
 
             if (col.Nulls != IndexNulls.Default)
             {
-                return Unsupported($"SQL Server indexes do not support NULLS FIRST / NULLS LAST ordering (index {idx.Name}).");
+                return UnsupportedFragment($"SQL Server indexes do not support NULLS FIRST / NULLS LAST ordering (index {idx.Name}).");
             }
 
             var sort = col.Sort switch
@@ -186,9 +208,10 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         }
 
         var unique = idx.IsUnique ? "UNIQUE " : "";
+        var clustered = onView && idx.IsUnique ? "CLUSTERED " : "";
         var include = idx.Include.Count > 0 ? $" INCLUDE ({ColumnList(idx.Include)})" : "";
-        var sql = $"CREATE {unique}INDEX {Quote(idx.Name)} ON {Qualify(action.Table)} ({string.Join(", ", keys)}){include}";
-        return Statement(idx.Predicate is { } predicate ? $"{sql} WHERE {predicate}" : sql);
+        var sql = $"CREATE {unique}{clustered}INDEX {Quote(idx.Name)} ON {Qualify(owner)} ({string.Join(", ", keys)}){include}";
+        return Result.Success(idx.Predicate is { } predicate ? $"{sql} WHERE {predicate}" : sql);
     }
 
     protected override Result<IReadOnlyList<SqlStatement>> DropIndex(DropIndex action) =>
@@ -255,17 +278,57 @@ internal sealed class SqlServerSqlDialect : SqlDialect
     // ── Views ─────────────────────────────────────────────────────────────────
 
     // A create is a plain CREATE: if the view already exists, the database has drifted from the plan's
-    // belief, and SQL Server saying so is the correct outcome.
-    protected override Result<IReadOnlyList<SqlStatement>> CreateView(CreateView action) =>
-        action.View.IsMaterialized
-            ? Unsupported(action)
-            : Statement($"CREATE VIEW {Qualify(action.SchemaName, action.View.Name)} AS {action.View.Body}");
+    // belief, and SQL Server saying so is the correct outcome. A view's indexes ride its definition (the
+    // linearizer emits no separate CreateIndex for a created view), so they render here.
+    protected override Result<IReadOnlyList<SqlStatement>> CreateView(CreateView action)
+    {
+        if (action.View.IsMaterialized)
+        {
+            return Unsupported(action);
+        }
 
-    // A body change replaces in place; the plan knows the view exists, so OR ALTER is honest here.
+        return ViewStatements(action.SchemaName, action.View,
+            $"CREATE VIEW {Qualify(action.SchemaName, action.View.Name)}{SchemaBinding(action.View)} AS {action.View.Body}");
+    }
+
+    // A body or binding change replaces in place; the plan knows the view exists, so OR ALTER is honest here.
+    // Unlike a create, this renders the view alone: the view survives the statement and so do its indexes, so
+    // the core diffs them separately and any that are new arrive as their own CreateIndex.
     protected override Result<IReadOnlyList<SqlStatement>> ReplaceView(ReplaceView action) =>
         action.View.IsMaterialized
             ? Unsupported(action)
-            : Statement($"CREATE OR ALTER VIEW {Qualify(action.SchemaName, action.View.Name)} AS {action.View.Body}");
+            : Statement($"CREATE OR ALTER VIEW {Qualify(action.SchemaName, action.View.Name)}{SchemaBinding(action.View)} AS {action.View.Body}");
+
+    /// <summary>
+    /// The view's own statement, followed by the indexes it carries.
+    /// </summary>
+    private Result<IReadOnlyList<SqlStatement>> ViewStatements(SqlIdentifier schemaName, View view, string definition)
+    {
+        var owner = new ObjectAddress(schemaName, view.Name, SchemaObjectKind.View);
+        var statements = new List<SqlStatement> { new(definition) };
+
+        foreach (var index in view.Indexes)
+        {
+            var sql = IndexSql(owner, index, onView: true);
+            if (sql.IsFailure)
+            {
+                return Result.Failure<IReadOnlyList<SqlStatement>>(sql.Diagnostics);
+            }
+            statements.Add(new SqlStatement(sql.Require()));
+        }
+
+        return Statements([.. statements]);
+    }
+
+    /// <summary>
+    /// The <c>WITH SCHEMABINDING</c> clause, declared on the view rather than inferred from its indexes.
+    /// </summary>
+    /// <remarks>
+    /// SQL Server refuses to index a view that is not schema-bound, so an indexed view is always bound — but the
+    /// converse does not hold, and a binding read off the indexes could not survive a view that is bound without
+    /// being indexed, nor an index added to a view that already exists unbound.
+    /// </remarks>
+    private static string SchemaBinding(View view) => view.IsSchemaBound ? " WITH SCHEMABINDING" : "";
 
     protected override Result<IReadOnlyList<SqlStatement>> RenameView(RenameView action) =>
         action.IsMaterialized
