@@ -62,7 +62,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         }
     }
 
-    private async ValueTask<Database> Read(PlanningScope scope, CancellationToken cancellationToken)
+    private async ValueTask<Result<Database>> Read(PlanningScope scope, CancellationToken cancellationToken)
     {
         // Every address belongs to a schema (a schema address is its own), so the read narrows to those.
         var schemas = scope.IsUnscoped
@@ -99,10 +99,44 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         var triggerComments = await QueryNestedComments(connection, schemas, TriggerCommentSql, cancellationToken);
         var typeComments = await QueryComments(connection, schemas, TypeCommentSql, cancellationToken);
 
-        return Build(schemaNamesInDb, tables, columns, primaryKeys, uniqueConstraints, foreignKeys, checkConstraints,
+        var database = Build(schemaNamesInDb, tables, columns, primaryKeys, uniqueConstraints, foreignKeys, checkConstraints,
             indexes, views, xmlSchemaCollections, sequences, routines, tableGrants, triggers, nativeTypes, aliasTypes,
             schemaComments, tableComments, viewComments, sequenceComments, routineComments,
             columnComments, indexComments, constraintComments, triggerComments, typeComments);
+
+        return Result.From(database, SystemNamedConstraints(primaryKeys, uniqueConstraints, foreignKeys, checkConstraints));
+    }
+
+    /// <summary>
+    /// Reports constraints SQL Server named for itself. NSchema addresses every object by name, so the generated
+    /// name is captured and re-emitted — which is the only thing it can do, and which quietly makes a name like
+    /// <c>UQ__Document__F73921F7</c> part of the declaration. That suffix is derived from the object id in the
+    /// database it was read from, so it means nothing anywhere else.
+    /// </summary>
+    private static IEnumerable<Diagnostic> SystemNamedConstraints(
+        List<KeyColumnRow> primaryKeys, List<KeyColumnRow> uniqueConstraints,
+        List<ForeignKeyRow> foreignKeys, List<CheckRow> checkConstraints)
+    {
+        var generated = primaryKeys.Concat(uniqueConstraints)
+            .Where(k => k.SystemNamed)
+            .Select(k => new MemberAddress(k.Schema, k.Table, k.Constraint))
+            .Concat(foreignKeys.Where(f => f.SystemNamed).Select(f => new MemberAddress(f.Schema, f.Table, f.Constraint)))
+            .Concat(checkConstraints.Where(c => c.SystemNamed).Select(c => new MemberAddress(c.Schema, c.Table, c.Name)))
+            .Distinct()
+            .OrderBy(a => a.ToString(), StringComparer.Ordinal)
+            .ToList();
+
+        if (generated.Count == 0)
+        {
+            yield break;
+        }
+
+        // One finding with many occurrences, not one per constraint: it is a single property of the source
+        // database, and a schema of any size would otherwise bury everything else under it.
+        var shown = string.Join(", ", generated.Take(5));
+        var rest = generated.Count > 5 ? $", and {generated.Count - 5} others" : "";
+        yield return Diagnostic.Warning(Source, "system-named-constraint",
+            $"{generated.Count} constraint(s) are named by SQL Server rather than declared: {shown:text}{rest:text}.");
     }
 
     // ── Row DTOs ────────────────────────────────────────────────────────────────
@@ -113,10 +147,10 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         string? XmlCollectionSchema, string? XmlCollection, bool XmlIsDocument);
     private sealed record NativeTypeRow(string Schema, string Name);
     private sealed record AliasTypeRow(string Schema, string Name, string BaseType, int MaxLength, int Precision, int Scale, bool IsNullable);
-    private sealed record KeyColumnRow(string Schema, string Table, string Constraint, string Column);
+    private sealed record KeyColumnRow(string Schema, string Table, string Constraint, string Column, bool Clustered, bool SystemNamed);
     private sealed record ForeignKeyRow(string Schema, string Table, string Constraint, string Column,
-        string RefSchema, string RefTable, string RefColumn, int DeleteAction, int UpdateAction);
-    private sealed record CheckRow(string Schema, string Table, string Name, string Definition);
+        string RefSchema, string RefTable, string RefColumn, int DeleteAction, int UpdateAction, bool SystemNamed);
+    private sealed record CheckRow(string Schema, string Table, string Name, string Definition, bool SystemNamed);
     private sealed record IndexColumnRow(string Schema, string Owner, string Index, string Column, bool IsIncluded, bool IsDescending, bool IsUnique, string? Filter,
         int IndexType, string? XmlSecondaryType, string? XmlPrimaryIndex);
     private sealed record ViewRow(string Schema, string Name, string Definition, bool IsSchemaBound);
@@ -193,19 +227,21 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             r.IsDBNull(14) ? null : r.GetString(14), r.IsDBNull(15) ? null : r.GetString(15), r.GetBoolean(16)), ct);
 
     private static Task<List<KeyColumnRow>> QueryKeyConstraints(DbConnection c, string[]? schemas, string type, CancellationToken ct) => Query(c, $"""
-        SELECT s.name, t.name, kc.name, col.name
+        SELECT s.name, t.name, kc.name, col.name, i.type, kc.is_system_named
         FROM sys.key_constraints kc
         JOIN sys.tables t ON t.object_id = kc.parent_object_id
         JOIN sys.schemas s ON s.schema_id = t.schema_id
         JOIN sys.index_columns ic ON ic.object_id = kc.parent_object_id AND ic.index_id = kc.unique_index_id
         JOIN sys.columns col ON col.object_id = ic.object_id AND col.column_id = ic.column_id
+        JOIN sys.indexes i ON i.object_id = kc.parent_object_id AND i.index_id = kc.unique_index_id
         WHERE kc.type = '{type}' AND {SystemSchemaFilter} AND {SchemaScopeFilter}
         ORDER BY s.name, t.name, kc.name, ic.key_ordinal
-        """, schemas, r => new KeyColumnRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3)), ct);
+        """, schemas, r => new KeyColumnRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3),
+            r.GetByte(4) == ClusteredIndexType, r.GetBoolean(5)), ct);
 
     private static Task<List<ForeignKeyRow>> QueryForeignKeys(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
         SELECT s.name, t.name, fk.name, pc.name, rs.name, rt.name, rc.name,
-               fk.delete_referential_action, fk.update_referential_action
+               fk.delete_referential_action, fk.update_referential_action, fk.is_system_named
         FROM sys.foreign_keys fk
         JOIN sys.tables t ON t.object_id = fk.parent_object_id
         JOIN sys.schemas s ON s.schema_id = t.schema_id
@@ -217,16 +253,16 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         WHERE {SystemSchemaFilter} AND {SchemaScopeFilter}
         ORDER BY s.name, t.name, fk.name, fkc.constraint_column_id
         """, schemas, r => new ForeignKeyRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3),
-            r.GetString(4), r.GetString(5), r.GetString(6), r.GetByte(7), r.GetByte(8)), ct);
+            r.GetString(4), r.GetString(5), r.GetString(6), r.GetByte(7), r.GetByte(8), r.GetBoolean(9)), ct);
 
     private static Task<List<CheckRow>> QueryCheckConstraints(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
-        SELECT s.name, t.name, cc.name, cc.definition
+        SELECT s.name, t.name, cc.name, cc.definition, cc.is_system_named
         FROM sys.check_constraints cc
         JOIN sys.tables t ON t.object_id = cc.parent_object_id
         JOIN sys.schemas s ON s.schema_id = t.schema_id
         WHERE {SystemSchemaFilter} AND {SchemaScopeFilter}
         ORDER BY s.name, t.name, cc.name
-        """, schemas, r => new CheckRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3)), ct);
+        """, schemas, r => new CheckRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3), r.GetBoolean(4)), ct);
 
     // Indexes hang off sys.objects rather than sys.tables because a view carries them too: an indexed view is
     // a view with a unique clustered index on it, and reading only tables loses it silently. An XML index is a
@@ -624,6 +660,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             {
                 Name = g.Key,
                 ColumnNames = g.Select(k => new SqlIdentifier(k.Column)).ToList(),
+                Clustered = g.First().Clustered,
                 Comment = constraintComments.GetValueOrDefault((table.Schema, table.Name, g.Key)),
             })
             .FirstOrDefault();
@@ -635,6 +672,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             {
                 Name = g.Key,
                 ColumnNames = g.Select(k => new SqlIdentifier(k.Column)).ToList(),
+                Clustered = g.First().Clustered,
                 Comment = constraintComments.GetValueOrDefault((table.Schema, table.Name, g.Key)),
             })
             .ToList();
@@ -751,6 +789,9 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     // other form reads a primary's node table and names it.
     private const int XmlIndexType = 3;
 
+    // sys.indexes.type: 1 is the clustered index (the table's own storage), 2 a nonclustered one beside it.
+    private const int ClusteredIndexType = 1;
+
     private static XmlIndexDefinition? BuildXmlIndex(IndexColumnRow row) => row.IndexType != XmlIndexType
         ? null
         : new XmlIndexDefinition(row.XmlSecondaryType switch
@@ -792,6 +833,8 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             Comment = comment,
             Predicate = StripParens(first.Filter),
             Method = null,
+            // An XML index has no clustering to report; it indexes a shredded document, not the table's rows.
+            Clustered = first.IndexType == XmlIndexType ? null : first.IndexType == ClusteredIndexType,
             Include = include,
             Xml = BuildXmlIndex(first),
         };
