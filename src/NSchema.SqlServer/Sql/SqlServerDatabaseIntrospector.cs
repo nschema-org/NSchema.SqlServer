@@ -549,7 +549,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
                 Body = ExtractViewBody(v.Definition),
                 IsSchemaBound = v.IsSchemaBound,
                 Comment = viewComments.GetValueOrDefault((v.Schema, v.Name)),
-                Indexes = [.. BuildIndexes(indexes, indexComments, v.Schema, v.Name)],
+                Indexes = [.. BuildIndexes(indexes, indexComments, v.Schema, v.Name, onView: true)],
             }).ToList());
 
         var xmlSchemaCollectionsBySchema = xmlSchemaCollections
@@ -660,7 +660,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             {
                 Name = g.Key,
                 ColumnNames = g.Select(k => new SqlIdentifier(k.Column)).ToList(),
-                Clustered = g.First().Clustered,
+                Clustered = Declared(g.First().Clustered, clustersByDefault: true),
                 Comment = constraintComments.GetValueOrDefault((table.Schema, table.Name, g.Key)),
             })
             .FirstOrDefault();
@@ -672,7 +672,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             {
                 Name = g.Key,
                 ColumnNames = g.Select(k => new SqlIdentifier(k.Column)).ToList(),
-                Clustered = g.First().Clustered,
+                Clustered = Declared(g.First().Clustered, clustersByDefault: false),
                 Comment = constraintComments.GetValueOrDefault((table.Schema, table.Name, g.Key)),
             })
             .ToList();
@@ -779,11 +779,12 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         List<IndexColumnRow> allIndexes,
         Dictionary<(string, string, string), string> indexComments,
         string schema,
-        string owner) =>
+        string owner,
+        bool onView = false) =>
         [.. allIndexes
             .Where(i => i.Schema == schema && i.Owner == owner)
             .GroupBy(i => i.Index)
-            .Select(g => BuildIndex(g.Key, g.ToList(), indexComments.GetValueOrDefault((schema, owner, g.Key))))];
+            .Select(g => BuildIndex(g.Key, g.ToList(), indexComments.GetValueOrDefault((schema, owner, g.Key)), onView))];
 
     // index type 3 is an XML index. A primary has no secondary_type_desc and reads the column itself; every
     // other form reads a primary's node table and names it.
@@ -791,6 +792,15 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
 
     // sys.indexes.type: 1 is the clustered index (the table's own storage), 2 a nonclustered one beside it.
     private const int ClusteredIndexType = 1;
+
+    /// <summary>
+    /// The clustering worth recording: what the engine would have done anyway reads back as "unspecified", so a
+    /// schema authored without the keyword and one read from the database describe each other exactly. Recording
+    /// it unconditionally instead makes every default-clustered primary key differ from the NSQL that created
+    /// it, and the plan proposes dropping and recreating a key nothing has touched.
+    /// </summary>
+    private static bool? Declared(bool clustered, bool clustersByDefault) =>
+        clustered == clustersByDefault ? null : clustered;
 
     private static XmlIndexDefinition? BuildXmlIndex(IndexColumnRow row) => row.IndexType != XmlIndexType
         ? null
@@ -818,7 +828,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     /// </summary>
     private static string Literal(string xml) => $"N'{xml.Replace("'", "''")}'";
 
-    private static TableIndex BuildIndex(string name, List<IndexColumnRow> columns, string? comment)
+    private static TableIndex BuildIndex(string name, List<IndexColumnRow> columns, string? comment, bool onView)
     {
         var keys = columns.Where(c => !c.IsIncluded)
             .Select(c => new IndexColumn(new SqlIdentifier(c.Column), Sort: c.IsDescending ? IndexSort.Descending : IndexSort.Default))
@@ -834,7 +844,11 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             Predicate = StripParens(first.Filter),
             Method = null,
             // An XML index has no clustering to report; it indexes a shredded document, not the table's rows.
-            Clustered = first.IndexType == XmlIndexType ? null : first.IndexType == ClusteredIndexType,
+            // On a view, a unique index clusters by default — SQL Server refuses a nonclustered index on a view
+            // that has no unique clustered one, so that is what the dialect renders for an undeclared one.
+            Clustered = first.IndexType == XmlIndexType
+                ? null
+                : Declared(first.IndexType == ClusteredIndexType, clustersByDefault: onView && first.IsUnique),
             Include = include,
             Xml = BuildXmlIndex(first),
         };

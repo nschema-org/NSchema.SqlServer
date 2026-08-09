@@ -14,6 +14,9 @@ As a consequence, breaking changes that are specific to this provider (rather th
 
 ### Added
 
+- **Clustered indexes round-trip.** `SupportsClustering` is on, so `CLUSTERED` and `NONCLUSTERED` are rendered on indexes, primary keys and unique constraints.
+- **XML schema collections round-trip.** `XML_SCHEMA_NAMESPACE` reassembles a collection from `sys.xml_schema_*` into the single document it was declared as, and a typed `xml` column carries the collection it is bound to along with whether it is `DOCUMENT` or `CONTENT`.
+- **Constraints SQL Server named for itself are reported.** `is_system_named` is read for key, foreign-key and check constraints, and a `system-named-constraint` warning names them as one grouped finding.
 - **XML indexes round-trip.** `sys.xml_indexes` supplies the kind and, for a secondary, the primary whose node table it reads (`i.type` identifies an XML index, since `secondary_type_desc` is null for a primary as well as for a non-XML index).
 - **Indexed views round-trip.** Indexes are read from `sys.objects` rather than `sys.tables`, so a view's indexes are introspected onto `View.Indexes` alongside a table's.
 - **Schema binding round-trips.** `WITH SCHEMABINDING` is read from `sys.sql_modules.is_schema_bound` onto `View.IsSchemaBound` and written back from it.
