@@ -12,9 +12,17 @@ As a consequence, breaking changes that are specific to this provider (rather th
 
 ## [Unreleased]
 
+### Added
+
+- **`is_persisted` is introspected**, and `SupportsVirtualGeneratedColumns` is declared.
+
 ### Changed
 
 - **The build now writes the full dependency closure beside the assembly** (`CopyLocalLockFileAssemblies`), so a `dotnet build` of this project can be loaded directly by `PLUGIN ( path = '...' )` without being packed first. Package contents are unchanged.
+
+### Fixed
+
+- **Computed columns are no longer all `PERSISTED`.** The keyword was emitted unconditionally, so a column computed on read came back written to storage.
 
 ## [5.7.0] - 2026-08-09
 

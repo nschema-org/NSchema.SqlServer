@@ -58,6 +58,9 @@ internal sealed class SqlServerSqlDialect : SqlDialect
     /// </remarks>
     public override bool SupportsClustering => true;
 
+    /// <summary>SQL Server computes a column on read unless it is declared PERSISTED.</summary>
+    public override bool SupportsVirtualGeneratedColumns => true;
+
     /// <summary>A bracket-quoted identifier; a literal ']' inside a name is doubled.</summary>
     protected override string Quote(SqlIdentifier identifier) => $"[{identifier.Value.Replace("]", "]]")}]";
 
@@ -616,7 +619,9 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         // A computed (generated) column states no type — only its expression, persisted to storage.
         if (col.GeneratedExpression is { } generated)
         {
-            return $"{Quote(col.Name)} AS ({generated}) PERSISTED";
+            // PERSISTED used to be unconditional, so every computed column came back written to storage whatever
+            // the source said — a change to how the table is written and how much of it can be indexed.
+            return $"{Quote(col.Name)} AS ({generated}){(col.IsStored ? " PERSISTED" : "")}";
         }
 
         var identity = col.IsIdentity ? BuildIdentityClause(col.IdentityOptions) : "";
