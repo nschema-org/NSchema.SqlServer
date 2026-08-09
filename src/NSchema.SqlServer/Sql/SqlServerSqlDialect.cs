@@ -51,6 +51,13 @@ internal sealed class SqlServerSqlDialect : SqlDialect
     /// <inheritdoc />
     protected override string Name => "SQL Server (NSchema.SqlServer)";
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// A SQL Server table is stored as its clustered index (a heap only when it has none), so clustering is a
+    /// property of the index and it is written on the declaration.
+    /// </remarks>
+    public override bool SupportsClustering => true;
+
     /// <summary>A bracket-quoted identifier; a literal ']' inside a name is doubled.</summary>
     protected override string Quote(SqlIdentifier identifier) => $"[{identifier.Value.Replace("]", "]]")}]";
 
@@ -214,7 +221,16 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         }
 
         var unique = idx.IsUnique ? "UNIQUE " : "";
-        var clustered = onView && idx.IsUnique ? "CLUSTERED " : "";
+
+        // What the index says, when it says anything. An indexed view is the exception: its unique index has
+        // to be the clustered one, so an undeclared index on a view still clusters.
+        var clustered = idx.Clustered switch
+        {
+            true => "CLUSTERED ",
+            false => "NONCLUSTERED ",
+            null when onView && idx.IsUnique => "CLUSTERED ",
+            null => "",
+        };
         var include = idx.Include.Count > 0 ? $" INCLUDE ({ColumnList(idx.Include)})" : "";
         var sql = $"CREATE {unique}{clustered}INDEX {Quote(idx.Name)} ON {Qualify(owner)} ({string.Join(", ", keys)}){include}";
         return Result.Success(idx.Predicate is { } predicate ? $"{sql} WHERE {predicate}" : sql);
