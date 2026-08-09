@@ -64,6 +64,9 @@ internal sealed class SqlServerSqlDialect : SqlDialect
     /// <summary>ROWGUIDCOL is SQL Server's own; no other engine has it.</summary>
     public override bool SupportsRowGuidColumns => true;
 
+    /// <summary>SQL Server makes every column default a named constraint.</summary>
+    public override bool SupportsNamedDefaults => true;
+
     /// <summary>A bracket-quoted identifier; a literal ']' inside a name is doubled.</summary>
     protected override string Quote(SqlIdentifier identifier) => $"[{identifier.Value.Replace("]", "]]")}]";
 
@@ -630,7 +633,10 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         var identity = col.IsIdentity ? BuildIdentityClause(col.IdentityOptions) : "";
         // Identity and DEFAULT are mutually exclusive on SQL Server; the core's structural policy keeps a default
         // off an identity column, so this only adds a default to a plain column.
-        var def = col is { DefaultExpression: { } d, IsIdentity: false } ? $" DEFAULT {d}" : "";
+        // A named default is worth emitting because the alternative is SQL Server inventing one
+        // (DF__Departmen__Modif__37A5467C) that cannot be predicted and so cannot later be referred to.
+        var defaultName = col.DefaultConstraintName is { } n ? $" CONSTRAINT {Quote(n)}" : "";
+        var def = col is { DefaultExpression: { } d, IsIdentity: false } ? $"{defaultName} DEFAULT {d}" : "";
         // ROWGUIDCOL sits between the type and the nullability, which is where T-SQL writes it.
         var rowGuid = col.IsRowGuid ? " ROWGUIDCOL" : "";
         return $"{Quote(col.Name)} {TypeSql(col.Type)}{identity}{rowGuid}{NullableSql(col.IsNullable)}{def}";

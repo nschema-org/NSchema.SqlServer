@@ -143,7 +143,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
 
     private sealed record TableRow(string Schema, string Name);
     private sealed record ColumnRow(string Schema, string Table, string Name, string TypeName, int MaxLength, int Precision, int Scale,
-        bool IsNullable, bool IsIdentity, bool IsRowGuid, long? Seed, long? Increment, string? Computed, bool ComputedPersisted, string? Default, string TypeSchema,
+        bool IsNullable, bool IsIdentity, bool IsRowGuid, long? Seed, long? Increment, string? Computed, bool ComputedPersisted, string? Default, string? DefaultName, string TypeSchema,
         string? XmlCollectionSchema, string? XmlCollection, bool XmlIsDocument);
     private sealed record NativeTypeRow(string Schema, string Name);
     private sealed record AliasTypeRow(string Schema, string Name, string BaseType, int MaxLength, int Precision, int Scale, bool IsNullable);
@@ -205,7 +205,8 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
                col.max_length, col.precision, col.scale,
                col.is_nullable, col.is_identity, col.is_rowguidcol,
                CAST(ic.seed_value AS bigint), CAST(ic.increment_value AS bigint),
-               cc.definition, ISNULL(cc.is_persisted, 0), dc.definition, SCHEMA_NAME(typ.schema_id),
+               cc.definition, ISNULL(cc.is_persisted, 0), dc.definition,
+               CASE WHEN dc.is_system_named = 0 THEN dc.name END, SCHEMA_NAME(typ.schema_id),
                SCHEMA_NAME(xsc.schema_id), xsc.name, col.is_xml_document
         FROM sys.columns col
         JOIN sys.tables t ON t.object_id = col.object_id
@@ -223,8 +224,9 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             r.GetBoolean(7), r.GetBoolean(8), r.GetBoolean(9),
             r.IsDBNull(10) ? null : r.GetInt64(10), r.IsDBNull(11) ? null : r.GetInt64(11),
             r.IsDBNull(12) ? null : r.GetString(12), r.GetBoolean(13), r.IsDBNull(14) ? null : r.GetString(14),
-            r.GetString(15),
-            r.IsDBNull(16) ? null : r.GetString(16), r.IsDBNull(17) ? null : r.GetString(17), r.GetBoolean(18)), ct);
+            r.IsDBNull(15) ? null : r.GetString(15),
+            r.GetString(16),
+            r.IsDBNull(17) ? null : r.GetString(17), r.IsDBNull(18) ? null : r.GetString(18), r.GetBoolean(19)), ct);
 
     private static Task<List<KeyColumnRow>> QueryKeyConstraints(DbConnection c, string[]? schemas, string type, CancellationToken ct) => Query(c, $"""
         SELECT s.name, t.name, kc.name, col.name, i.type, kc.is_system_named
@@ -652,6 +654,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
                 GeneratedExpression = c.Computed is null ? null : StripParens(c.Computed),
                 IsStored = c.ComputedPersisted,
                 IsRowGuid = c.IsRowGuid,
+                DefaultConstraintName = c.Computed is null && c.DefaultName is { } dn ? new SqlIdentifier(dn) : null,
             })
             .ToList();
 
