@@ -61,6 +61,9 @@ internal sealed class SqlServerSqlDialect : SqlDialect
     /// <summary>SQL Server computes a column on read unless it is declared PERSISTED.</summary>
     public override bool SupportsVirtualGeneratedColumns => true;
 
+    /// <summary>ROWGUIDCOL is SQL Server's own; no other engine has it.</summary>
+    public override bool SupportsRowGuidColumns => true;
+
     /// <summary>A bracket-quoted identifier; a literal ']' inside a name is doubled.</summary>
     protected override string Quote(SqlIdentifier identifier) => $"[{identifier.Value.Replace("]", "]]")}]";
 
@@ -628,7 +631,9 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         // Identity and DEFAULT are mutually exclusive on SQL Server; the core's structural policy keeps a default
         // off an identity column, so this only adds a default to a plain column.
         var def = col is { DefaultExpression: { } d, IsIdentity: false } ? $" DEFAULT {d}" : "";
-        return $"{Quote(col.Name)} {TypeSql(col.Type)}{identity}{NullableSql(col.IsNullable)}{def}";
+        // ROWGUIDCOL sits between the type and the nullability, which is where T-SQL writes it.
+        var rowGuid = col.IsRowGuid ? " ROWGUIDCOL" : "";
+        return $"{Quote(col.Name)} {TypeSql(col.Type)}{identity}{rowGuid}{NullableSql(col.IsNullable)}{def}";
     }
 
     // SQL Server identity uses a (seed, increment) pair; there is no minimum-value concept, so

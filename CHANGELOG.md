@@ -23,6 +23,7 @@ As a consequence, breaking changes that are specific to this provider (rather th
 ### Fixed
 
 - **Computed columns are no longer all `PERSISTED`.** The keyword was emitted unconditionally, so a column computed on read came back written to storage.
+- **`ROWGUIDCOL` is no longer dropped.** It was neither introspected nor rendered, so a column marked as the table's row identifier came back as an ordinary one.
 
 ## [5.7.0] - 2026-08-09
 
