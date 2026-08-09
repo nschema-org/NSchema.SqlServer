@@ -10,6 +10,12 @@ This package uses **lockstep major versioning** with the `NSchema.Core` package:
 
 As a consequence, breaking changes that are specific to this provider (rather than the core API) are signalled by a **minor version bump** rather than a major one, and called out explicitly in this changelog.
 
+## [Unreleased]
+
+### Changed
+
+- **The build now writes the full dependency closure beside the assembly** (`CopyLocalLockFileAssemblies`), so a `dotnet build` of this project can be loaded directly by `PLUGIN ( path = '...' )` without being packed first. Package contents are unchanged.
+
 ## [5.7.0] - 2026-08-09
 
 ### Added

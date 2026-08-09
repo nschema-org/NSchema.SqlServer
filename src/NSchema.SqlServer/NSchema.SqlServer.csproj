@@ -4,6 +4,17 @@
     <Title>NSchema.SqlServer</Title>
     <Description>SQL Server provider for NSchema</Description>
     <TargetFramework>net10.0</TargetFramework>
+
+    <!--
+      Copies the full dependency closure into the build output beside NSchema.SqlServer.deps.json, which is what
+      makes this build loadable directly: PLUGIN ( path = '...' ) points the CLI at an assembly and its resolver
+      reads that manifest. Without it, only this project's own assembly lands in bin and the plugin fails to load
+      with a dependency resolution error that names none of this.
+
+      Deliberately not EnableDynamicLoading, which implies this and also generates a runtimeconfig.json that pack
+      then fails on (NU5026). The package contents are unchanged by this property.
+    -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
