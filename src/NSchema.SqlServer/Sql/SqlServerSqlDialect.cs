@@ -67,6 +67,9 @@ internal sealed class SqlServerSqlDialect : SqlDialect
     /// <summary>SQL Server makes every column default a named constraint.</summary>
     public override bool SupportsNamedDefaults => true;
 
+    /// <summary>NOT FOR REPLICATION is SQL Server's own.</summary>
+    public override bool SupportsNotForReplication => true;
+
     /// <summary>A bracket-quoted identifier; a literal ']' inside a name is doubled.</summary>
     protected override string Quote(SqlIdentifier identifier) => $"[{identifier.Value.Replace("]", "]]")}]";
 
@@ -337,7 +340,8 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         }
 
         var timing = trigger.Timing == TriggerTiming.InsteadOf ? "INSTEAD OF" : "AFTER";
-        return Statement($"CREATE {(orAlter ? "OR ALTER " : "")}TRIGGER {Qualify(table.Schema, trigger.Name)} ON {Qualify(table)} {timing} {TriggerEventsSql(trigger.Events)} AS {body}");
+        var notForReplication = trigger.IsNotForReplication ? " NOT FOR REPLICATION" : "";
+        return Statement($"CREATE {(orAlter ? "OR ALTER " : "")}TRIGGER {Qualify(table.Schema, trigger.Name)} ON {Qualify(table)} {timing} {TriggerEventsSql(trigger.Events)}{notForReplication} AS {body}");
     }
 
     protected override Result<IReadOnlyList<SqlStatement>> DropTrigger(DropTrigger action) =>
@@ -645,7 +649,8 @@ internal sealed class SqlServerSqlDialect : SqlDialect
     // SQL Server identity uses a (seed, increment) pair; there is no minimum-value concept, so
     // IdentityOptions.MinValue is not expressible and is ignored. Absent options default to IDENTITY(1, 1).
     private static string BuildIdentityClause(IdentityOptions? options) =>
-        $" IDENTITY({options?.StartWith ?? 1}, {options?.IncrementBy ?? 1})";
+        $" IDENTITY({options?.StartWith ?? 1}, {options?.IncrementBy ?? 1})"
+        + (options is { NotForReplication: true } ? " NOT FOR REPLICATION" : "");
 
     // MS_Description is added, updated or dropped depending on whether the comment is appearing, changing or going
     // away — which the Old/New pair on the action expresses directly. Levels are 0..2 (schema, object, sub-object).
