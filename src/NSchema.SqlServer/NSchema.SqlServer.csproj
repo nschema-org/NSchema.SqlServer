@@ -31,7 +31,7 @@
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <Version>5.7.0</Version>
+    <Version>5.8.0</Version>
     <AssemblyVersion>$(Version.Split('-')[0])</AssemblyVersion>
     <FileVersion>$(Version.Split('-')[0])</FileVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
@@ -77,6 +77,15 @@
     <LocalCoreProject>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../NSchema.Core/src/NSchema.Core/NSchema.Core.csproj'))</LocalCoreProject>
     <UseLocalCore Condition="'$(UseLocalCore)' == '' AND Exists('$(LocalCoreProject)')">true</UseLocalCore>
     <UseLocalCore Condition="'$(UseLocalCore)' == ''">false</UseLocalCore>
+
+    <!--
+      A package built against a sibling Core is not shippable: NSchema.Core's version is whatever that working copy
+      says, so a stable provider ends up declaring a prerelease dependency (NU5104, an error here). Rather than
+      silence the check, do not produce the package at all — the one thing worse than failing the build is emitting
+      a .nupkg nobody should publish. Packaging is unaffected on a normal build, and pack-local.cs calls pack
+      explicitly, so nothing that really produces packages relies on this.
+    -->
+    <GeneratePackageOnBuild Condition="'$(UseLocalCore)' == 'true'">false</GeneratePackageOnBuild>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(UseLocalCore)' != 'true'">
