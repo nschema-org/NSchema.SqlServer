@@ -58,6 +58,18 @@ internal sealed class SqlServerSqlDialect : SqlDialect
     /// </remarks>
     public override bool SupportsClustering => true;
 
+    /// <summary>SQL Server computes a column on read unless it is declared PERSISTED.</summary>
+    public override bool SupportsVirtualGeneratedColumns => true;
+
+    /// <summary>ROWGUIDCOL is SQL Server's own; no other engine has it.</summary>
+    public override bool SupportsRowGuidColumns => true;
+
+    /// <summary>SQL Server makes every column default a named constraint.</summary>
+    public override bool SupportsNamedDefaults => true;
+
+    /// <summary>NOT FOR REPLICATION is SQL Server's own.</summary>
+    public override bool SupportsNotForReplication => true;
+
     /// <summary>A bracket-quoted identifier; a literal ']' inside a name is doubled.</summary>
     protected override string Quote(SqlIdentifier identifier) => $"[{identifier.Value.Replace("]", "]]")}]";
 
@@ -328,7 +340,8 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         }
 
         var timing = trigger.Timing == TriggerTiming.InsteadOf ? "INSTEAD OF" : "AFTER";
-        return Statement($"CREATE {(orAlter ? "OR ALTER " : "")}TRIGGER {Qualify(table.Schema, trigger.Name)} ON {Qualify(table)} {timing} {TriggerEventsSql(trigger.Events)} AS {body}");
+        var notForReplication = trigger.IsNotForReplication ? " NOT FOR REPLICATION" : "";
+        return Statement($"CREATE {(orAlter ? "OR ALTER " : "")}TRIGGER {Qualify(table.Schema, trigger.Name)} ON {Qualify(table)} {timing} {TriggerEventsSql(trigger.Events)}{notForReplication} AS {body}");
     }
 
     protected override Result<IReadOnlyList<SqlStatement>> DropTrigger(DropTrigger action) =>
@@ -616,20 +629,28 @@ internal sealed class SqlServerSqlDialect : SqlDialect
         // A computed (generated) column states no type — only its expression, persisted to storage.
         if (col.GeneratedExpression is { } generated)
         {
-            return $"{Quote(col.Name)} AS ({generated}) PERSISTED";
+            // PERSISTED used to be unconditional, so every computed column came back written to storage whatever
+            // the source said — a change to how the table is written and how much of it can be indexed.
+            return $"{Quote(col.Name)} AS ({generated}){(col.IsStored ? " PERSISTED" : "")}";
         }
 
         var identity = col.IsIdentity ? BuildIdentityClause(col.IdentityOptions) : "";
         // Identity and DEFAULT are mutually exclusive on SQL Server; the core's structural policy keeps a default
         // off an identity column, so this only adds a default to a plain column.
-        var def = col is { DefaultExpression: { } d, IsIdentity: false } ? $" DEFAULT {d}" : "";
-        return $"{Quote(col.Name)} {TypeSql(col.Type)}{identity}{NullableSql(col.IsNullable)}{def}";
+        // A named default is worth emitting because the alternative is SQL Server inventing one
+        // (DF__Departmen__Modif__37A5467C) that cannot be predicted and so cannot later be referred to.
+        var defaultName = col.DefaultConstraintName is { } n ? $" CONSTRAINT {Quote(n)}" : "";
+        var def = col is { DefaultExpression: { } d, IsIdentity: false } ? $"{defaultName} DEFAULT {d}" : "";
+        // ROWGUIDCOL sits between the type and the nullability, which is where T-SQL writes it.
+        var rowGuid = col.IsRowGuid ? " ROWGUIDCOL" : "";
+        return $"{Quote(col.Name)} {TypeSql(col.Type)}{identity}{rowGuid}{NullableSql(col.IsNullable)}{def}";
     }
 
     // SQL Server identity uses a (seed, increment) pair; there is no minimum-value concept, so
     // IdentityOptions.MinValue is not expressible and is ignored. Absent options default to IDENTITY(1, 1).
     private static string BuildIdentityClause(IdentityOptions? options) =>
-        $" IDENTITY({options?.StartWith ?? 1}, {options?.IncrementBy ?? 1})";
+        $" IDENTITY({options?.StartWith ?? 1}, {options?.IncrementBy ?? 1})"
+        + (options is { NotForReplication: true } ? " NOT FOR REPLICATION" : "");
 
     // MS_Description is added, updated or dropped depending on whether the comment is appearing, changing or going
     // away — which the Old/New pair on the action expresses directly. Levels are 0..2 (schema, object, sub-object).

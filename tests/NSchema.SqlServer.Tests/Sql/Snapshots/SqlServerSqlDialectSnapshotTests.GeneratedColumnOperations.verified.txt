@@ -4,12 +4,12 @@
 CREATE TABLE [dbo].[boxes] (
     [w] int NOT NULL,
     [h] int NOT NULL,
-    [area] AS (w * h) PERSISTED
+    [area] AS (w * h)
 ),
     RunOutsideTransaction: false
   },
   {
-    Sql: ALTER TABLE [dbo].[boxes] ADD [perimeter] AS (2 * (w + h)) PERSISTED,
+    Sql: ALTER TABLE [dbo].[boxes] ADD [perimeter] AS (2 * (w + h)),
     RunOutsideTransaction: false
   }
 ]

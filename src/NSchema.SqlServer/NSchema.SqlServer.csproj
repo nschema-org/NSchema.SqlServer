@@ -4,6 +4,17 @@
     <Title>NSchema.SqlServer</Title>
     <Description>SQL Server provider for NSchema</Description>
     <TargetFramework>net10.0</TargetFramework>
+
+    <!--
+      Copies the full dependency closure into the build output beside NSchema.SqlServer.deps.json, which is what
+      makes this build loadable directly: PLUGIN ( path = '...' ) points the CLI at an assembly and its resolver
+      reads that manifest. Without it, only this project's own assembly lands in bin and the plugin fails to load
+      with a dependency resolution error that names none of this.
+
+      Deliberately not EnableDynamicLoading, which implies this and also generates a runtimeconfig.json that pack
+      then fails on (NU5026). The package contents are unchanged by this property.
+    -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
@@ -20,7 +31,7 @@
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <Version>5.7.0</Version>
+    <Version>5.8.0</Version>
     <AssemblyVersion>$(Version.Split('-')[0])</AssemblyVersion>
     <FileVersion>$(Version.Split('-')[0])</FileVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
@@ -45,11 +56,53 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.SqlClient" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="all" />
-    <PackageReference Include="NSchema.Core" />
   </ItemGroup>
 
   <ItemGroup>
     <Using Include="NSchema.Diagnostics" />
   </ItemGroup>
+
+
+  <!--
+    Core comes from a sibling checkout when one is there, and from the pinned package otherwise, announced on every
+    build so the two are never confused. Force either with -p:UseLocalCore=true|false.
+
+    Needed here as well as in the CLI, and for a different reason. At runtime a plugin always binds to the host's
+    NSchema.Core, so which Core this project *references* does not decide what it runs against. At compile time it
+    does: overriding a capability that only exists in an unreleased Core cannot be expressed against the package.
+  -->
+  <PropertyGroup>
+    <!-- Fully resolved: a path that keeps its '..' segments is re-relativised when this project is referenced
+         from somewhere else, such as a generated host project in a temp directory. -->
+    <LocalCoreProject>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../NSchema.Core/src/NSchema.Core/NSchema.Core.csproj'))</LocalCoreProject>
+    <UseLocalCore Condition="'$(UseLocalCore)' == '' AND Exists('$(LocalCoreProject)')">true</UseLocalCore>
+    <UseLocalCore Condition="'$(UseLocalCore)' == ''">false</UseLocalCore>
+
+    <!--
+      A package built against a sibling Core is not shippable: NSchema.Core's version is whatever that working copy
+      says, so a stable provider ends up declaring a prerelease dependency (NU5104, an error here). Rather than
+      silence the check, do not produce the package at all — the one thing worse than failing the build is emitting
+      a .nupkg nobody should publish. Packaging is unaffected on a normal build, and pack-local.cs calls pack
+      explicitly, so nothing that really produces packages relies on this.
+    -->
+    <GeneratePackageOnBuild Condition="'$(UseLocalCore)' == 'true'">false</GeneratePackageOnBuild>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(UseLocalCore)' != 'true'">
+    <PackageReference Include="NSchema.Core" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UseLocalCore)' == 'true'">
+    <ProjectReference Include="$(LocalCoreProject)" />
+  </ItemGroup>
+
+  <Target Name="ReportCoreSource" BeforeTargets="ResolveProjectReferences">
+    <Error Condition="'$(UseLocalCore)' == 'true' AND !Exists('$(LocalCoreProject)')"
+           Text="UseLocalCore=true but there is no checkout at $(LocalCoreProject). Clone NSchema.Core beside this repository, or pass -p:UseLocalCore=false to build against the pinned package." />
+    <Message Condition="'$(UseLocalCore)' == 'true'" Importance="high"
+             Text="NSchema.Core: sibling checkout ($(LocalCoreProject)). Pass -p:UseLocalCore=false for the pinned package." />
+    <Message Condition="'$(UseLocalCore)' != 'true'" Importance="high"
+             Text="NSchema.Core: pinned package." />
+  </Target>
 
 </Project>

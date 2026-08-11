@@ -143,7 +143,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
 
     private sealed record TableRow(string Schema, string Name);
     private sealed record ColumnRow(string Schema, string Table, string Name, string TypeName, int MaxLength, int Precision, int Scale,
-        bool IsNullable, bool IsIdentity, long? Seed, long? Increment, string? Computed, string? Default, string TypeSchema,
+        bool IsNullable, bool IsIdentity, bool IsRowGuid, long? Seed, long? Increment, bool IdentityNotForReplication, string? Computed, bool ComputedPersisted, string? Default, string? DefaultName, string TypeSchema,
         string? XmlCollectionSchema, string? XmlCollection, bool XmlIsDocument);
     private sealed record NativeTypeRow(string Schema, string Name);
     private sealed record AliasTypeRow(string Schema, string Name, string BaseType, int MaxLength, int Precision, int Scale, bool IsNullable);
@@ -158,7 +158,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     private sealed record SequenceRow(string Schema, string Name, string TypeName, long Start, long Increment, long Min, long Max, bool Cycle, bool IsCached, int? CacheSize);
     private sealed record RoutineRow(string Schema, string Name, bool IsProcedure, string Definition);
     private sealed record TableGrantRow(string Schema, string Table, string Role, string Privilege);
-    private sealed record TriggerRow(string Schema, string Table, string Name, bool IsInsteadOf, string Definition, string EventType);
+    private sealed record TriggerRow(string Schema, string Table, string Name, bool IsInsteadOf, string Definition, string EventType, bool NotForReplication);
 
     // ── Queries ───────────────────────────────────────────────────────────────────
 
@@ -203,9 +203,10 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
     private static Task<List<ColumnRow>> QueryColumns(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
         SELECT s.name, t.name, col.name, typ.name,
                col.max_length, col.precision, col.scale,
-               col.is_nullable, col.is_identity,
-               CAST(ic.seed_value AS bigint), CAST(ic.increment_value AS bigint),
-               cc.definition, dc.definition, SCHEMA_NAME(typ.schema_id),
+               col.is_nullable, col.is_identity, col.is_rowguidcol,
+               CAST(ic.seed_value AS bigint), CAST(ic.increment_value AS bigint), ISNULL(ic.is_not_for_replication, 0),
+               cc.definition, ISNULL(cc.is_persisted, 0), dc.definition,
+               CASE WHEN dc.is_system_named = 0 THEN dc.name END, SCHEMA_NAME(typ.schema_id),
                SCHEMA_NAME(xsc.schema_id), xsc.name, col.is_xml_document
         FROM sys.columns col
         JOIN sys.tables t ON t.object_id = col.object_id
@@ -220,11 +221,12 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         """, schemas, r => new ColumnRow(
             r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3),
             r.GetInt16(4), r.GetByte(5), r.GetByte(6),
-            r.GetBoolean(7), r.GetBoolean(8),
-            r.IsDBNull(9) ? null : r.GetInt64(9), r.IsDBNull(10) ? null : r.GetInt64(10),
-            r.IsDBNull(11) ? null : r.GetString(11), r.IsDBNull(12) ? null : r.GetString(12),
-            r.GetString(13),
-            r.IsDBNull(14) ? null : r.GetString(14), r.IsDBNull(15) ? null : r.GetString(15), r.GetBoolean(16)), ct);
+            r.GetBoolean(7), r.GetBoolean(8), r.GetBoolean(9),
+            r.IsDBNull(10) ? null : r.GetInt64(10), r.IsDBNull(11) ? null : r.GetInt64(11), r.GetBoolean(12),
+            r.IsDBNull(13) ? null : r.GetString(13), r.GetBoolean(14), r.IsDBNull(15) ? null : r.GetString(15),
+            r.IsDBNull(16) ? null : r.GetString(16),
+            r.GetString(17),
+            r.IsDBNull(18) ? null : r.GetString(18), r.IsDBNull(19) ? null : r.GetString(19), r.GetBoolean(20)), ct);
 
     private static Task<List<KeyColumnRow>> QueryKeyConstraints(DbConnection c, string[]? schemas, string type, CancellationToken ct) => Query(c, $"""
         SELECT s.name, t.name, kc.name, col.name, i.type, kc.is_system_named
@@ -358,7 +360,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             r.GetInt16(3), r.GetByte(4), r.GetByte(5), r.GetBoolean(6)), ct);
 
     private static Task<List<TriggerRow>> QueryTriggers(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
-        SELECT s.name, t.name, tr.name, tr.is_instead_of_trigger, m.definition, te.type_desc
+        SELECT s.name, t.name, tr.name, tr.is_instead_of_trigger, m.definition, te.type_desc, tr.is_not_for_replication
         FROM sys.triggers tr
         JOIN sys.tables t ON t.object_id = tr.parent_id
         JOIN sys.schemas s ON s.schema_id = t.schema_id
@@ -367,7 +369,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         WHERE tr.is_ms_shipped = 0 AND tr.parent_class = 1
           AND {SystemSchemaFilter} AND {SchemaScopeFilter}
         ORDER BY s.name, t.name, tr.name
-        """, schemas, r => new TriggerRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetBoolean(3), r.GetString(4), r.GetString(5)), ct);
+        """, schemas, r => new TriggerRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetBoolean(3), r.GetString(4), r.GetString(5), r.GetBoolean(6)), ct);
 
     private static Task<List<TableGrantRow>> QueryTableGrants(DbConnection c, string[]? schemas, CancellationToken ct) => Query(c, $"""
         SELECT s.name, o.name, dpr.name, dp.permission_name
@@ -648,8 +650,11 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
                 IsIdentity = c.IsIdentity,
                 DefaultExpression = c.Computed is null ? StripParens(c.Default) : null,
                 Comment = columnComments.GetValueOrDefault((c.Schema, c.Table, c.Name)),
-                IdentityOptions = c.IsIdentity ? new IdentityOptions(c.Seed, null, c.Increment) : null,
+                IdentityOptions = c.IsIdentity ? new IdentityOptions(c.Seed, null, c.Increment, c.IdentityNotForReplication) : null,
                 GeneratedExpression = c.Computed is null ? null : StripParens(c.Computed),
+                IsStored = c.ComputedPersisted,
+                IsRowGuid = c.IsRowGuid,
+                DefaultConstraintName = c.Computed is null && c.DefaultName is { } dn ? new SqlIdentifier(dn) : null,
             })
             .ToList();
 
@@ -758,6 +763,7 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
             Level = TriggerLevel.Statement,
             Comment = comment,
             Body = ExtractTriggerBody(first.Definition),
+            IsNotForReplication = first.NotForReplication,
         };
     }
 

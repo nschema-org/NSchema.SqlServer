@@ -10,6 +10,23 @@ This package uses **lockstep major versioning** with the `NSchema.Core` package:
 
 As a consequence, breaking changes that are specific to this provider (rather than the core API) are signalled by a **minor version bump** rather than a major one, and called out explicitly in this changelog.
 
+## [5.8.0] - 2026-08-11
+
+### Added
+
+- **`is_persisted` is introspected**, and `SupportsVirtualGeneratedColumns` is declared.
+
+### Changed
+
+- **The build now writes the full dependency closure beside the assembly** (`CopyLocalLockFileAssemblies`), so a `dotnet build` of this project can be loaded directly by `PLUGIN ( path = '...' )` without being packed first. Package contents are unchanged.
+
+### Fixed
+
+- **Computed columns are no longer all `PERSISTED`.** The keyword was emitted unconditionally, so a column computed on read came back written to storage.
+- **`ROWGUIDCOL` is no longer dropped.** It was neither introspected nor rendered, so a column marked as the table's row identifier came back as an ordinary one.
+- **Default constraint names are preserved.** A default was emitted unnamed, so SQL Server generated one.
+- **`NOT FOR REPLICATION` is no longer dropped** from identity columns or triggers.
+
 ## [5.7.0] - 2026-08-09
 
 ### Added
