@@ -1,23 +1,28 @@
 ﻿[
   {
     Sql: ALTER TABLE [dbo].[users] ADD [age] int NULL,
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: AddColumn
   },
   {
     Sql: EXEC sys.sp_rename @objname = N'[dbo].[users].[age]', @newname = N'years', @objtype = N'COLUMN',
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: RenameColumn
   },
   {
     Sql: ALTER TABLE [dbo].[users] ALTER COLUMN [years] bigint NULL,
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: AlterColumn
   },
   {
     Sql: ALTER TABLE [dbo].[users] ALTER COLUMN [notes] varchar(200) NOT NULL,
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: AlterColumn
   },
   {
     Sql: ALTER TABLE [dbo].[users] ADD DEFAULT 0 FOR [years],
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: SetColumnDefault
   },
   {
     Sql:
@@ -27,10 +32,12 @@ DECLARE @df sysname = (
     INNER JOIN sys.columns c ON c.object_id = dc.parent_object_id AND c.column_id = dc.parent_column_id
     WHERE dc.parent_object_id = OBJECT_ID(N'[dbo].[users]') AND c.name = N'years');
 IF @df IS NOT NULL EXEC('ALTER TABLE [dbo].[users] DROP CONSTRAINT [' + @df + ']');,
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: SetColumnDefault
   },
   {
     Sql: ALTER TABLE [dbo].[users] DROP COLUMN [years],
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: DropColumn
   }
 ]

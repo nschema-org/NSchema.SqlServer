@@ -10,6 +10,14 @@ This package uses **lockstep major versioning** with the `NSchema.Core` package:
 
 As a consequence, breaking changes that are specific to this provider (rather than the core API) are signalled by a **minor version bump** rather than a major one, and called out explicitly in this changelog.
 
+## [5.8.1] - 2026-08-12
+
+### Fixed
+
+- **A sequence start declared alongside its minimum now settles.**
+- **An identity column reports no seed or increment where neither was declared.**
+- **`text` no longer drifts.**
+
 ## [5.8.0] - 2026-08-11
 
 ### Added

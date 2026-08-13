@@ -4,6 +4,7 @@
 CREATE TABLE [dbo].[counters] (
     [id] bigint IDENTITY(1000, 5) NOT NULL
 ),
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: CreateTable
   }
 ]

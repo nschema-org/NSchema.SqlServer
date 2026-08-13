@@ -650,7 +650,11 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
                 IsIdentity = c.IsIdentity,
                 DefaultExpression = c.Computed is null ? StripParens(c.Default) : null,
                 Comment = columnComments.GetValueOrDefault((c.Schema, c.Table, c.Name)),
-                IdentityOptions = c.IsIdentity ? new IdentityOptions(c.Seed, null, c.Increment, c.IdentityNotForReplication) : null,
+                // The catalog reports a seed and an increment for every identity, declared or not, so they are
+                // folded onto the engine's defaults exactly as a sequence's options are.
+                IdentityOptions = c.IsIdentity
+                    ? SqlServerSqlEquivalence.FoldOptions(new IdentityOptions(c.Seed, null, c.Increment, c.IdentityNotForReplication))
+                    : null,
                 GeneratedExpression = c.Computed is null ? null : StripParens(c.Computed),
                 IsStored = c.ComputedPersisted,
                 IsRowGuid = c.IsRowGuid,
@@ -924,32 +928,20 @@ internal sealed partial class SqlServerDatabaseIntrospector(SqlServerConnectionS
         _ => ReferentialAction.NoAction,
     };
 
-    // SQL Server engine defaults are folded to null so a bare CREATE SEQUENCE round-trips to an all-null
-    // SequenceOptions and the core's record equality sees no drift.
-    private static SequenceOptions NormalizeSequenceOptions(SequenceRow row)
-    {
-        var ascending = row.Increment > 0;
-        var (typeMin, typeMax) = row.TypeName switch
-        {
-            "tinyint" => ((long)byte.MinValue, (long)byte.MaxValue),
-            "smallint" => (short.MinValue, short.MaxValue),
-            "int" => (int.MinValue, int.MaxValue),
-            _ => (long.MinValue, long.MaxValue),
-        };
-
-        var defaultMin = ascending ? typeMin : typeMin;
-        var defaultMax = typeMax;
-        var defaultStart = ascending ? row.Min : row.Max;
-
-        return new SequenceOptions(
-            DataType: row.TypeName == "bigint" ? null : SqlType.Parse(row.TypeName),
-            StartWith: row.Start == defaultStart ? null : row.Start,
-            IncrementBy: row.Increment == 1 ? null : row.Increment,
-            MinValue: row.Min == defaultMin ? null : row.Min,
-            MaxValue: row.Max == defaultMax ? null : row.Max,
+    // sys.sequences holds a concrete value for every option whatever was declared, so the row is folded onto the
+    // engine's defaults — through the same rules the comparison folds a desired schema with, so the two meet — and
+    // an imported project says only what was asked for.
+    private static SequenceOptions NormalizeSequenceOptions(SequenceRow row) =>
+        SqlServerSqlEquivalence.FoldOptions(new SequenceOptions(
+            DataType: SqlType.Parse(row.TypeName),
+            StartWith: row.Start,
+            IncrementBy: row.Increment,
+            MinValue: row.Min,
+            MaxValue: row.Max,
+            // A sequence left to the engine is cached at a size it does not report, which is the same as saying
+            // nothing about the cache; only a declared size is a value the project could have asked for.
             Cache: row.IsCached ? row.CacheSize : null,
-            Cycle: row.Cycle);
-    }
+            Cycle: row.Cycle));
 
     // SQL Server wraps a stored default/check/filter in one or more layers of parentheses (e.g. ((0)), (N'x')).
     // Strip every layer that fully encloses the expression so the stored form matches what an author wrote.

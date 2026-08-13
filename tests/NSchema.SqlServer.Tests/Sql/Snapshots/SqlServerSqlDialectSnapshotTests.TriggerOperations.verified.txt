@@ -1,22 +1,27 @@
 ﻿[
   {
     Sql: CREATE TRIGGER [dbo].[users_audit] ON [dbo].[users] AFTER INSERT, UPDATE AS BEGIN INSERT INTO dbo.audit (msg) VALUES ('changed'); END,
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: CreateTrigger
   },
   {
     Sql: CREATE OR ALTER TRIGGER [dbo].[users_audit] ON [dbo].[users] AFTER INSERT, UPDATE, DELETE AS BEGIN INSERT INTO dbo.audit (msg) VALUES ('changed again'); END,
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: ReplaceTrigger
   },
   {
     Sql: CREATE TRIGGER [dbo].[invoices_guard] ON [dbo].[invoices] INSTEAD OF DELETE AS BEGIN RAISERROR('no deletes', 16, 1); END,
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: CreateTrigger
   },
   {
     Sql: EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'audit changes', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'users', @level2type = N'TRIGGER', @level2name = N'users_audit',
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: SetTriggerComment
   },
   {
     Sql: DROP TRIGGER [dbo].[users_audit],
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: DropTrigger
   }
 ]

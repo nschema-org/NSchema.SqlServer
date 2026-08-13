@@ -18,6 +18,7 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="NSubstitute" />
     <PackageReference Include="Shouldly" />
+    <PackageReference Include="SSH.NET" />
     <PackageReference Include="Testcontainers.MsSql" />
     <PackageReference Include="Verify.XunitV3" />
     <PackageReference Include="xunit.runner.visualstudio">

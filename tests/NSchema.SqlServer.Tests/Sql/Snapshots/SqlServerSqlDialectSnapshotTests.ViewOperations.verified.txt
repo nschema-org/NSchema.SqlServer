@@ -1,18 +1,22 @@
 ﻿[
   {
     Sql: CREATE VIEW [dbo].[active_users] AS SELECT id, email FROM dbo.users WHERE active = 1,
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: CreateView
   },
   {
     Sql: CREATE OR ALTER VIEW [dbo].[active_users] AS SELECT id, email, created_at FROM dbo.users WHERE active = 1,
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: ReplaceView
   },
   {
     Sql: EXEC sys.sp_rename @objname = N'[dbo].[legacy_active]', @newname = N'active_users', @objtype = N'OBJECT',
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: RenameView
   },
   {
     Sql: DROP VIEW [dbo].[active_users],
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: DropView
   }
 ]

@@ -1,14 +1,17 @@
 ﻿[
   {
     Sql: GRANT SELECT, INSERT ON [dbo].[users] TO [app_role],
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: GrantTablePrivileges
   },
   {
     Sql: GRANT SELECT ON [dbo].[users] TO [readonly],
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: GrantTablePrivileges
   },
   {
     Sql: REVOKE SELECT, INSERT, UPDATE, DELETE ON [dbo].[users] FROM [app_role],
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: RevokeTablePrivileges
   }
 ]
