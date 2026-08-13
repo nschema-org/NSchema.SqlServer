@@ -1,30 +1,37 @@
 ﻿[
   {
     Sql: CREATE FUNCTION [dbo].[active_user_count]() RETURNS int AS BEGIN RETURN (SELECT COUNT(*) FROM dbo.users WHERE active = 1) END,
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: CreateRoutine
   },
   {
     Sql: CREATE OR ALTER FUNCTION [dbo].[active_user_count]() RETURNS int AS BEGIN RETURN (SELECT COUNT(*) FROM dbo.users WHERE active = 1 AND banned = 0) END,
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: ReplaceRoutine
   },
   {
     Sql: EXEC sys.sp_rename @objname = N'[dbo].[user_count]', @newname = N'active_user_count', @objtype = N'OBJECT',
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: RenameRoutine
   },
   {
     Sql: CREATE OR ALTER FUNCTION [dbo].[add_numbers](@a int, @b int) RETURNS int AS BEGIN RETURN @a + @b END,
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: RecreateRoutine
   },
   {
     Sql: DROP FUNCTION [dbo].[active_user_count],
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: DropRoutine
   },
   {
     Sql: CREATE PROCEDURE [dbo].[archive_users](@cutoff date) AS BEGIN DELETE FROM dbo.users WHERE created_at < @cutoff END,
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: CreateRoutine
   },
   {
     Sql: DROP PROCEDURE [dbo].[archive_users],
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: DropRoutine
   }
 ]

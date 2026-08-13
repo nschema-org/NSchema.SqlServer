@@ -8,6 +8,7 @@ CREATE TABLE [dbo].[users] (
     [notes] varchar(max) NULL,
     CONSTRAINT [pk_users] PRIMARY KEY ([id])
 ),
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: CreateTable
   }
 ]

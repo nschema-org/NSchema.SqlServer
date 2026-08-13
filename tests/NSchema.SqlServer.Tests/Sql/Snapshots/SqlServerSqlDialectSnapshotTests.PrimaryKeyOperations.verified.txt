@@ -1,10 +1,12 @@
 ﻿[
   {
     Sql: ALTER TABLE [dbo].[users] ADD CONSTRAINT [pk_users] PRIMARY KEY ([id], [tenant_id]),
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: AddPrimaryKey
   },
   {
     Sql: ALTER TABLE [dbo].[users] DROP CONSTRAINT [pk_users],
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: DropPrimaryKey
   }
 ]

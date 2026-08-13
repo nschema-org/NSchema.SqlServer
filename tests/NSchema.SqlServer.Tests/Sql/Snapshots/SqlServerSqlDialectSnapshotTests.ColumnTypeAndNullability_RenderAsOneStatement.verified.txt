@@ -1,6 +1,7 @@
 ﻿[
   {
     Sql: ALTER TABLE [dbo].[users] ALTER COLUMN [age] bigint NOT NULL,
-    RunOutsideTransaction: false
+    RunOutsideTransaction: false,
+    Action: AlterColumn
   }
 ]
