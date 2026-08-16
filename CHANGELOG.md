@@ -145,4 +145,16 @@ First release of the SQL Server provider for NSchema, tracking NSchema 3.2.0 (an
 - `SqlServerSqlGenerator` implements `ISqlGenerator` to translates an NSchema `MigrationPlan` into T-SQL: bracket-quoted identifiers, `IDENTITY(seed, increment)`, persisted computed columns, `CREATE OR ALTER` views and routines, extended-property comments, and a folded `ALTER COLUMN` for paired type/nullability changes. Features SQL Server has no equivalent for raise a clear `NotSupportedException`.
 - `SqlType.Money`, `SqlType.Xml`, and `SqlType.RowVersion` extension helpers for SQL Server-specific column types.
 
+[5.8.1]: https://github.com/nschema-org/NSchema.SqlServer/compare/v5.8.0...v5.8.1
+[5.8.0]: https://github.com/nschema-org/NSchema.SqlServer/compare/v5.7.0...v5.8.0
+[5.7.0]: https://github.com/nschema-org/NSchema.SqlServer/compare/v5.6.0...v5.7.0
+[5.6.0]: https://github.com/nschema-org/NSchema.SqlServer/compare/v5.5.0...v5.6.0
+[5.5.0]: https://github.com/nschema-org/NSchema.SqlServer/compare/v5.4.0...v5.5.0
+[5.4.0]: https://github.com/nschema-org/NSchema.SqlServer/compare/v5.3.0...v5.4.0
+[5.3.0]: https://github.com/nschema-org/NSchema.SqlServer/compare/v5.2.0...v5.3.0
+[5.2.0]: https://github.com/nschema-org/NSchema.SqlServer/compare/v5.1.0...v5.2.0
+[5.1.0]: https://github.com/nschema-org/NSchema.SqlServer/compare/v5.0.0...v5.1.0
+[5.0.0]: https://github.com/nschema-org/NSchema.SqlServer/compare/v4.0.0...v5.0.0
+[4.0.0]: https://github.com/nschema-org/NSchema.SqlServer/compare/v3.0.1...v4.0.0
+[3.0.1]: https://github.com/nschema-org/NSchema.SqlServer/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/nschema-org/NSchema.SqlServer/releases/tag/v3.0.0
